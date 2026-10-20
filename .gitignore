@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+
+# Provisioning profiles and signing material stay local.
+signing/*.provisionprofile
+signing/*.mobileprovision
+signing/*.p12
+signing/*.cer
