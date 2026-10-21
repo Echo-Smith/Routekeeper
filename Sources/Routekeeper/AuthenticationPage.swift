@@ -3,6 +3,7 @@ import GuardCore
 
 struct AuthenticationPage: View {
     @Bindable var controller: CredentialController
+    var launchAction: (() -> Void)? = nil
     private func text(_ zh: String, _ en: String) -> String { L10n.resolvedEnglish ? en : zh }
 
     var body: some View {
@@ -53,7 +54,8 @@ struct AuthenticationPage: View {
             GuardCard(title: text("使用已保存的凭证启动", "Start with your saved token"), subtitle: text("启动时自动读取已保存的登录凭证，只供本次启动使用。", "Uses your saved token for the Claude Code process started here.")) {
                 HStack {
                     Button {
-                        controller.launchClaudeCode()
+                        if let launchAction { launchAction() }
+                        else { controller.launchClaudeCode() }
                     } label: {
                         Label(text("启动 Claude Code", "Launch Claude Code from Keychain"), systemImage: "play.fill")
                     }

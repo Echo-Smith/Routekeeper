@@ -5,7 +5,9 @@ cd "$(dirname "$0")/.."
 
 APP="$PWD/dist/Routekeeper.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-VOLUME_NAME="Routekeeper"
+# A versioned volume name prevents Finder from configuring an older mounted
+# Routekeeper image when both share the same default volume title.
+VOLUME_NAME="Routekeeper ${VERSION}"
 OUTPUT="$PWD/dist/Routekeeper-v${VERSION}.dmg"
 WORK="$(mktemp -d /tmp/routekeeper-dmg.XXXXXX)"
 STAGING="$WORK/staging"

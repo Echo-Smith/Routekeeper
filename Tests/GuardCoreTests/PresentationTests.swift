@@ -70,6 +70,87 @@ final class PresentationTests: XCTestCase {
         XCTAssertFalse(store.events[1].isAttention)
     }
 
+    @MainActor func testSandboxModeTakesStatusPriorityAndSkipsOrdinaryChecks() async {
+        actor Calls {
+            private(set) var value = 0
+            func increment() { value += 1 }
+            func count() -> Int { value }
+        }
+        let calls = Calls()
+        let suite = "guard-sandbox-status-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = GuardStore(
+            defaults: defaults,
+            watchNetwork: false,
+            notificationsEnabled: false,
+            runDiagnostic: { settings in
+                await calls.increment()
+                return DiagnosticSnapshot(
+                    settings: settings,
+                    checks: [],
+                    proxyIP: "1.2.3.4",
+                    tunnelIP: "1.2.3.4",
+                    processes: [],
+                    desktopPath: nil,
+                    codePaths: []
+                )
+            }
+        )
+
+        store.settings.experimentalSandboxEnabled = true
+        store.sandbox.phase = .networkPaused
+        await store.check()
+
+        XCTAssertEqual(store.title, "网络已关闭")
+        XCTAssertEqual(store.symbol, "wifi.slash")
+        let callCount = await calls.count()
+        XCTAssertEqual(callCount, 0)
+        XCTAssertFalse(store.monitoring)
+    }
+
+    @MainActor func testSandboxConfigurationPersistsWithoutProxyPassword() throws {
+        let suite = "guard-sandbox-secret-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = SandboxSession(preferences: defaults)
+
+        session.configuration.upstream.username = "routekeeper"
+        session.configuration.upstream.password = "do-not-persist"
+
+        let data = try XCTUnwrap(defaults.data(forKey: "routekeeper-isolation-configuration-v1"))
+        let persisted = try JSONDecoder().decode(IsolationConfiguration.self, from: data)
+        XCTAssertEqual(persisted.upstream.username, "routekeeper")
+        XCTAssertEqual(persisted.upstream.password, "")
+        let restored = SandboxSession(preferences: defaults)
+        XCTAssertEqual(restored.configuration.upstream.password, "")
+    }
+
+    func testSandboxEnvironmentCarriesCanonicalIsolationPaths() {
+        let root = URL(fileURLWithPath: "/private/tmp/routekeeper-environment-test", isDirectory: true)
+        let layout = IsolationSessionLayout(root: root)
+        let paths = IsolationResolvedPaths(
+            originalProject: URL(fileURLWithPath: "/Users/example/Project", isDirectory: true),
+            exchange: URL(fileURLWithPath: "/private/tmp/routekeeper-exchange", isDirectory: true),
+            layout: layout
+        )
+        let environment = SandboxSession.baseEnvironment(
+            configuration: IsolationConfiguration(
+                projectPath: paths.originalProject.path,
+                exchangePath: paths.exchange.path,
+                timezoneIdentifier: "Asia/Shanghai"
+            ),
+            paths: paths,
+            relayEnvironment: ["HTTPS_PROXY": "http://127.0.0.1:43123"]
+        )
+
+        XCTAssertEqual(environment["ISOLATION_WORKSPACE"], layout.workspace.path)
+        XCTAssertEqual(environment["ISOLATION_EXCHANGE"], paths.exchange.path)
+        XCTAssertEqual(environment["ISOLATION_ORIGINAL"], paths.originalProject.path)
+        XCTAssertEqual(environment["ISOLATION_CONTROL"], layout.control.path)
+        XCTAssertEqual(environment["HTTPS_PROXY"], "http://127.0.0.1:43123")
+    }
+
     @MainActor func testAutoAdoptRunsFreshCheckWithoutPriorSnapshot() async {
         actor Calls {
             private(set) var value = 0

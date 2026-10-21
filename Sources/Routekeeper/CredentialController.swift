@@ -134,6 +134,10 @@ final class CredentialController {
         }
     }
 
+    func launchToken() -> String? {
+        readToken()
+    }
+
     private func readToken() -> String? {
         var query = baseQuery()
         query[kSecReturnData as String] = true

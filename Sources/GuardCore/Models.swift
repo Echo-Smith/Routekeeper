@@ -18,10 +18,12 @@ public struct GuardSettings: Codable, Equatable, Sendable {
     public var action: IncidentAction = .notify
     public var cleanupConsented = false
     public var cleanupConsentedAt: Date?
+    public var experimentalSandboxEnabled = false
     public init() {}
     enum CodingKeys: String, CodingKey {
         case targetIP, alternateTargetIP, proxyClient, pollInterval, dnsProbeEnabled, udpProbeEnabled
         case protectDesktop, protectCode, action, cleanupConsented, cleanupConsentedAt
+        case experimentalSandboxEnabled
     }
     public init(from decoder: Decoder) throws {
         self.init()
@@ -37,6 +39,7 @@ public struct GuardSettings: Codable, Equatable, Sendable {
         action = try c.decodeIfPresent(IncidentAction.self, forKey: .action) ?? .notify
         cleanupConsented = try c.decodeIfPresent(Bool.self, forKey: .cleanupConsented) ?? false
         cleanupConsentedAt = try c.decodeIfPresent(Date.self, forKey: .cleanupConsentedAt)
+        experimentalSandboxEnabled = try c.decodeIfPresent(Bool.self, forKey: .experimentalSandboxEnabled) ?? false
     }
     public var validInterval: Bool { pollInterval.isFinite && (1...300).contains(pollInterval) }
     public var fixedIPv4TargetIP: String {

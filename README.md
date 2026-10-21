@@ -7,7 +7,7 @@ checks whether observed IPv4 and IPv6 traffic follows the expected route,
 helps compare expected and observed proxy exits, and can monitor selected
 applications for network changes.
 
-Version **0.3.10** (build 19) is a private development preview for macOS 14 or
+Version **0.3.11** (build 20) is a private development preview for macOS 14 or
 later. The app is ad-hoc signed and the local DMG is not notarized.
 
 ## Features
@@ -25,6 +25,10 @@ later. The app is ad-hoc signed and the local DMG is not notarized.
   extension entitlement.
 - Optional, time-limited packet-header capture after explicit administrator
   approval.
+- An optional experimental process sandbox for Claude Code. It runs a reviewed
+  project copy with an isolated HOME, a selected session timezone, local
+  HTTP CONNECT or SOCKS5 proxy upstreams, and process-level fail-closed
+  networking. The original project is never changed automatically.
 - An optional long-lived CLI credential helper that stores its value in the
   user's Keychain.
 - Redacted diagnostic export and local monitoring history.
@@ -33,6 +37,12 @@ Routekeeper reports evidence from the current Mac. It does not promise
 zero-leak operation, server-side account status, or immunity from every
 application-specific network path. Review the on-screen limitations and
 verification documents before relying on a check.
+
+The process sandbox is experimental. It relies on dynamically generated macOS
+`sandbox-exec` profiles, which Apple marks as deprecated and may change. A
+preflight failure keeps Claude Code from launching with unrestricted access.
+The sandbox is process and file isolation, not a full virtual machine, and it
+does not guarantee account, device-fingerprint, or server-side risk outcomes.
 
 ## Requirements
 
@@ -55,9 +65,10 @@ bash scripts/build-dmg.sh
 `build-dmg.sh` creates a draggable-to-Applications DMG for local distribution.
 Build output and signing profiles are excluded from Git.
 
-The test suite currently contains 73 tests covering route evidence, IPv6,
+The test suite currently contains 88 tests covering route evidence, IPv6,
 DNS/UDP probes, report redaction, monitoring state, process scope, capture
-validation, and presentation behavior.
+validation, presentation behavior, local relay protocols, Seatbelt file and
+network enforcement, child-process inheritance, and sandbox status handling.
 
 ## Read-only CLI
 

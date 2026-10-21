@@ -9,15 +9,22 @@ extension Notification.Name {
 @MainActor
 enum AppNavigationRequest {
     private static var pendingPage: GuardPage?
+    private static var pendingProtectionSection: ProtectionSection?
 
-    static func request(_ page: GuardPage) {
+    static func request(_ page: GuardPage, protectionSection: ProtectionSection? = nil) {
         pendingPage = page
+        pendingProtectionSection = protectionSection
         NotificationCenter.default.post(name: .routekeeperShowChecks, object: nil)
     }
 
     static func consumePendingPage() -> GuardPage? {
         defer { pendingPage = nil }
         return pendingPage
+    }
+
+    static func consumePendingProtectionSection() -> ProtectionSection? {
+        defer { pendingProtectionSection = nil }
+        return pendingProtectionSection
     }
 }
 
@@ -67,9 +74,17 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showChecksPanel() {
+        showPanel(page: .inspection)
+    }
+
+    func showSandboxPanel() {
+        showPanel(page: .protection, protectionSection: .sandbox)
+    }
+
+    private func showPanel(page: GuardPage, protectionSection: ProtectionSection? = nil) {
         NSApp.setActivationPolicy(.regular)
         refreshDockIcon()
-        AppNavigationRequest.request(.inspection)
+        AppNavigationRequest.request(page, protectionSection: protectionSection)
         NSApplication.shared.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -207,14 +222,24 @@ struct GuardApp: App {
 
 @MainActor
 func confirmQuit(_ store: GuardStore) {
-    if store.monitoring {
+    let sandboxActive = store.sandbox.phase.isActive
+    if store.monitoring || sandboxActive {
         let alert = NSAlert()
-        alert.messageText = "退出后将停止监控"
-        alert.informativeText = "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在高级网络保护或系统设置中关闭。"
-        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "停止监控并退出")
+        if sandboxActive {
+            alert.messageText = "退出后将结束沙箱会话"
+            alert.informativeText = "Routekeeper 会先终止本次隔离的 Claude 进程并关闭本地中继。沙箱工作副本会保留，原项目不会被自动修改。"
+            alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "结束沙箱并退出")
+        } else {
+            alert.messageText = "退出后将停止监控"
+            alert.informativeText = "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在高级网络保护或系统设置中关闭。"
+            alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "停止监控并退出")
+        }
         guard alert.runModal() == .alertSecondButtonReturn else { return }
     }
-    store.stop(); NSApplication.shared.terminate(nil)
+    Task {
+        await store.prepareForTermination()
+        NSApplication.shared.terminate(nil)
+    }
 }
 
 struct GuardMenu: View {
@@ -222,15 +247,40 @@ struct GuardMenu: View {
     let appDelegate: RoutekeeperAppDelegate
     var body: some View {
         Text(store.title)
-        Text(L10n.resolvedEnglish
-             ? "Target: \(store.settings.targetIP.isEmpty ? "not set" : store.settings.targetIP)"
-             : "目标：\(store.settings.targetIP.isEmpty ? "尚未设置" : store.settings.targetIP)")
+        if store.settings.experimentalSandboxEnabled {
+            Text(store.sandbox.message)
+        } else {
+            Text(L10n.resolvedEnglish
+                 ? "Target: \(store.settings.targetIP.isEmpty ? "not set" : store.settings.targetIP)"
+                 : "目标：\(store.settings.targetIP.isEmpty ? "尚未设置" : store.settings.targetIP)")
+        }
         Divider()
         Button(L("menu.openPanel")) {
             appDelegate.showChecksPanel()
         }
-        if store.monitoring { Button(L("menu.stopMonitor")) { store.stop() } }
-        else { Button(L("menu.runCheck")) { Task { await store.check() } }.disabled(store.checking) }
+        if store.settings.experimentalSandboxEnabled {
+            Button(L10n.resolvedEnglish ? "Open experimental sandbox" : "打开实验性进程沙箱") {
+                appDelegate.showSandboxPanel()
+            }
+            if store.sandbox.phase == .running {
+                Button(L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络") {
+                    store.pauseSandboxNetwork()
+                }
+            } else if store.sandbox.phase == .networkPaused {
+                Button(L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络") {
+                    Task { await store.resumeSandboxNetwork() }
+                }
+            }
+            if store.sandbox.phase.isActive {
+                Button(L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话") {
+                    Task { await store.endSandboxSession() }
+                }
+            }
+        } else if store.monitoring {
+            Button(L("menu.stopMonitor")) { store.stop() }
+        } else {
+            Button(L("menu.runCheck")) { Task { await store.check() } }.disabled(store.checking)
+        }
         Divider()
         Button(L("menu.quitShort")) { confirmQuit(store) }
     }

@@ -22,14 +22,15 @@ enum GuardPage: String, CaseIterable, Identifiable {
     }
 }
 
-private enum ProtectionSection: String, CaseIterable, Identifiable {
-    case settings, authentication, advancedNetwork
+enum ProtectionSection: String, CaseIterable, Identifiable {
+    case settings, sandbox, authentication, advancedNetwork
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .settings: return L10n.resolvedEnglish ? "Protection settings" : "保护设置"
+        case .sandbox: return L10n.resolvedEnglish ? "Experimental sandbox" : "实验性进程沙箱"
         case .authentication: return L10n.resolvedEnglish ? "Claude Code sign-in" : "Claude Code 登录凭证"
         case .advancedNetwork: return L10n.resolvedEnglish ? "Advanced network protection" : "高级网络保护"
         }
@@ -68,10 +69,19 @@ struct Dashboard: View {
     @AppStorage("routekeeper.disclaimer-accepted-version") private var disclaimerAcceptedVersion = ""
     @State private var showDisclaimerGate = false
     var needsOnboarding: Bool {
-        !store.monitoring && (store.snapshot == nil ||
+        !store.settings.experimentalSandboxEnabled && !store.monitoring && (store.snapshot == nil ||
             (store.settings.target(for: .ipv4) == nil && store.settings.target(for: .ipv6) == nil))
     }
-    var statusColor: Color { store.policy.phase == .incident ? .orange : store.policy.phase == .armed ? appAccent : .secondary }
+    var statusColor: Color {
+        if store.settings.experimentalSandboxEnabled {
+            switch store.sandbox.phase {
+            case .running: return appAccent
+            case .networkPaused, .failed: return .orange
+            default: return .secondary
+            }
+        }
+        return store.policy.phase == .incident ? .orange : store.policy.phase == .armed ? appAccent : .secondary
+    }
     private var sidebarWidth: CGFloat { sidebarCollapsed ? 76 : 200 }
     private var pageHorizontalPadding: CGFloat {
         page == .settings && settingsSection == .disclaimer ? 18 : 22
@@ -149,8 +159,12 @@ struct Dashboard: View {
     }
 
     private func applyNavigationRequest() {
+        let requestedSection = AppNavigationRequest.consumePendingProtectionSection()
         if let requested = AppNavigationRequest.consumePendingPage() {
             selectPage(requested)
+        }
+        if let requestedSection {
+            protectionSection = requestedSection
         }
     }
 
@@ -193,7 +207,7 @@ struct Dashboard: View {
                     selectPage(.settings)
                 }
                 if !sidebarCollapsed {
-                    Text("v0.3.10").font(.caption2).foregroundStyle(.tertiary)
+                    Text("v0.3.11").font(.caption2).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 2)
                 }
@@ -248,6 +262,9 @@ struct Dashboard: View {
     }
 
     var storeTitle: String {
+        if store.settings.experimentalSandboxEnabled {
+            return store.sandbox.statusTitle
+        }
         switch store.policy.phase {
         case .idle: return store.checking ? L("status.checking") : L("status.idle")
         case .armed: return L("status.armed")
@@ -338,6 +355,9 @@ struct Dashboard: View {
     }
 
     var capsuleText: String {
+        if store.settings.experimentalSandboxEnabled {
+            return store.sandbox.statusTitle
+        }
         if store.checking { return L("status.checking") }
         if store.policy.phase == .incident { return L("status.incident") }
         if store.monitoring { return L("status.armed") }
@@ -351,7 +371,12 @@ struct Dashboard: View {
     @ViewBuilder var pageBody: some View {
         switch page {
         case .home: homePage
-        case .inspection: InspectionPage(store: store, audit: store.egressAudit) { selectPage(.protection) }
+        case .inspection:
+            if store.settings.experimentalSandboxEnabled {
+                sandboxModeNotice
+            } else {
+                InspectionPage(store: store, audit: store.egressAudit) { selectPage(.protection) }
+            }
         case .protection: protectionPage
         case .settings: settingsPage
         }
@@ -359,15 +384,157 @@ struct Dashboard: View {
 
     var homePage: some View {
         VStack(alignment: .leading, spacing: 16) {
-            homeStatusCard
-            HStack(alignment: .top, spacing: 16) {
-                homeProtectionCard
-                homeEgressCard
+            if store.settings.experimentalSandboxEnabled {
+                homeSandboxCard
+                homeSandboxBoundaryCard
+            } else {
+                homeStatusCard
+                HStack(alignment: .top, spacing: 16) {
+                    homeProtectionCard
+                    homeEgressCard
+                }
+                homeActivityCard
             }
-            homeActivityCard
             Text(L("overview.boundary"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var homeSandboxCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
+                Image(systemName: store.sandbox.statusSymbol)
+                    .font(.system(size: 25, weight: .light))
+                    .foregroundStyle(statusColor)
+                    .frame(width: 56, height: 56)
+                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(store.sandbox.statusTitle)
+                        .font(.system(size: 21, weight: .semibold))
+                        .tracking(-0.3)
+                    Text(store.sandbox.message)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Text(text("实验性", "Experimental"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+            }
+
+            HStack(spacing: 20) {
+                Label(
+                    store.sandbox.networkEnabled ? text("中继网络已开启", "Relay network on") : text("网络已关闭", "Network off"),
+                    systemImage: store.sandbox.networkEnabled ? "network" : "wifi.slash"
+                )
+                .foregroundStyle(store.sandbox.networkEnabled ? appAccent : Color.orange)
+                Label(
+                    store.sandbox.claudeRunning ? text("Claude 正在运行", "Claude running") : text("Claude 未运行", "Claude not running"),
+                    systemImage: "terminal"
+                )
+                .foregroundStyle(.secondary)
+            }
+            .font(.callout.weight(.medium))
+
+            AppHairline()
+            HStack {
+                Text(text("普通网络监控在沙箱模式下暂停，状态与异常处理不会和隔离状态混用。",
+                           "Ordinary network monitoring is paused in sandbox mode so its status and actions do not conflict with isolation state."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button {
+                    protectionSection = .sandbox
+                    selectPage(.protection)
+                } label: {
+                    Label(text("打开沙箱", "Open sandbox"), systemImage: "lock.shield")
+                }
+                .routekeeperProminentButton()
+                .accessibilityIdentifier("home-open-sandbox")
+            }
+
+            if store.sandbox.phase == .running {
+                Button {
+                    store.pauseSandboxNetwork()
+                } label: {
+                    Label(text("立即关闭沙箱网络", "Turn sandbox network off"), systemImage: "wifi.slash")
+                }
+            } else if store.sandbox.phase == .networkPaused {
+                Button {
+                    Task { await store.resumeSandboxNetwork() }
+                } label: {
+                    Label(text("恢复沙箱网络", "Turn sandbox network back on"), systemImage: "wifi")
+                }
+            }
+        }
+        .padding(22)
+        .cardSurface(corner: 22)
+    }
+
+    private var homeSandboxBoundaryCard: some View {
+        GuardCard(
+            title: text("本次隔离能做什么", "What this isolation covers"),
+            subtitle: text(
+                "文件访问、子进程继承和网络失败关闭。",
+                "File boundaries, child-process inheritance and fail-closed networking."
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 9) {
+                Label(text("原项目不会被沙箱直接修改，变化留在工作副本中等待审阅。",
+                           "The original project is not modified directly; changes remain in the workspace copy for review."),
+                      systemImage: "folder.badge.questionmark")
+                Label(text("断开网络后已有连接与新连接都会失败，不会自动改走直连。",
+                           "Turning the network off closes existing connections and prevents new direct or relayed connections."),
+                      systemImage: "wifi.slash")
+                Label(text("它仍是实验性进程隔离，不是虚拟机，也不能保证账号或设备指纹结果。",
+                           "This remains experimental process isolation, not a virtual machine, and cannot guarantee account or device-fingerprint outcomes."),
+                      systemImage: "exclamationmark.shield")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var sandboxModeNotice: some View {
+        let active = store.sandbox.phase.isActive
+        return GuardCard(
+            title: active
+                ? text("普通网络体检已暂停", "Ordinary network checks are paused")
+                : text("实验性进程沙箱模式已开启", "Experimental sandbox mode is on"),
+            subtitle: text(
+                active
+                    ? "当前由实验性进程沙箱管理 Claude Code 的文件和网络边界。"
+                    : "当前没有运行中的沙箱会话，普通网络体检在模式关闭前保持暂停。",
+                active
+                    ? "The experimental process sandbox currently manages Claude Code's file and network boundaries."
+                    : "No sandbox session is running. Ordinary network checks stay paused until sandbox mode is turned off."
+            )
+        ) {
+            Text(text(
+                active
+                    ? "请在“保护 → 实验性进程沙箱”中查看启动检查、关闭或恢复网络，以及审阅工作副本。若要恢复普通网络体检，请先结束会话，再在保护设置中关闭沙箱模式。"
+                    : "可在“保护 → 实验性进程沙箱”中审阅工作副本或创建新会话；若要恢复普通网络体检，请在保护设置中关闭沙箱模式。",
+                active
+                    ? "Use Protection → Experimental sandbox to review preflight checks, turn network access off or back on, and review the workspace. To restore ordinary network checks, end the session and turn sandbox mode off in Protection settings."
+                    : "Use Protection → Experimental sandbox to review the workspace or create a new session. To restore ordinary network checks, turn sandbox mode off in Protection settings."
+            ))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Button {
+                protectionSection = .sandbox
+                selectPage(.protection)
+            } label: {
+                Label(text("打开实验性进程沙箱", "Open experimental process sandbox"), systemImage: "lock.shield")
+            }
+            .routekeeperProminentButton()
         }
     }
 
@@ -901,12 +1068,45 @@ struct Dashboard: View {
 
     var protectionSettingsPage: some View {
         VStack(spacing: 16) {
+            GuardCard(
+                title: text("实验性进程沙箱", "Experimental process sandbox"),
+                subtitle: text(
+                    "可选模式：限制 Claude Code 的文件访问、子进程网络和本项目修改范围。",
+                    "Optional mode: restrict Claude Code file access, child-process networking and project changes."
+                )
+            ) {
+                Toggle(
+                    text("开启实验性进程沙箱", "Enable experimental process sandbox"),
+                    isOn: Binding(
+                        get: { store.settings.experimentalSandboxEnabled },
+                        set: { enabled in
+                            if !enabled && store.sandbox.phase.isActive {
+                                store.notice = text(
+                                    "请先在“实验性进程沙箱”中结束当前会话，再关闭此模式。",
+                                    "End the active session in Experimental sandbox before turning this mode off."
+                                )
+                                return
+                            }
+                            store.settings.experimentalSandboxEnabled = enabled
+                        }
+                    )
+                )
+                .toggleStyle(.switch)
+                Text(text(
+                    "开启后，普通网络监控会暂停。此功能依赖 macOS 的 sandbox-exec，自检失败时会停止启动，不会退回无限制运行。",
+                    "Ordinary monitoring pauses while this mode is on. It relies on macOS sandbox-exec and fails closed instead of falling back to an unrestricted launch."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             GuardCard(title: L("card.protect"), subtitle: L("card.protect.sub")) {
                 protectToggle(isOn: $store.settings.protectDesktop, icon: "macwindow", label: L("protect.desktop"), available: store.desktopInstalled, unavailableHint: L("protect.desktop.unavailable"))
                 Divider().padding(.vertical, 4)
                 protectToggle(isOn: $store.settings.protectCode, icon: "terminal", label: L("protect.code"), available: store.codeInstalled, unavailableHint: L("protect.code.unavailable"))
                 Text(L("protect.code.hint")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.disabled(store.monitoring || store.checking || store.networkFilter.configured || store.networkFilter.busy)
+            }.disabled(store.monitoring || store.checking || store.networkFilter.configured || store.networkFilter.busy || store.settings.experimentalSandboxEnabled)
 
             GuardCard(title: L("card.target"), subtitle: L("card.target.sub")) {
                 fixedExitRow(
@@ -927,7 +1127,7 @@ struct Dashboard: View {
                     Text(L("target.guide.3")).font(.caption).foregroundStyle(.secondary)
                 }
                 Text(L("target.hint")).font(.caption2).foregroundStyle(.tertiary)
-            }.disabled(store.monitoring || store.checking)
+            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
 
             GuardCard(title: L10n.resolvedEnglish ? "Network checks" : "网络检测", subtitle: L10n.resolvedEnglish ? "Unknown probe results prevent monitoring" : "所选检查项目都通过后，才能开启监控") {
                 HStack {
@@ -966,7 +1166,7 @@ struct Dashboard: View {
                 Toggle(L10n.resolvedEnglish ? "Probe UDP egress with two STUN servers" : "用两处 STUN 服务检测 UDP 出口", isOn: $store.settings.udpProbeEnabled)
                 Text(L10n.resolvedEnglish ? "Disabled probes remain unverified. STUN is not a full browser WebRTC test. Probe services see your current egress IP." : "关闭的项目会显示未验证。STUN 不等于完整浏览器 WebRTC 测试；探测服务会看到当前出口 IP。")
                     .font(.caption).foregroundStyle(.secondary)
-            }.disabled(store.monitoring || store.checking)
+            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
 
             GuardCard(title: L("card.action"), subtitle: L("card.action.sub")) {
                 Picker("检测到异常时", selection: $store.settings.action) {
@@ -976,7 +1176,7 @@ struct Dashboard: View {
                 }.pickerStyle(.menu).frame(maxWidth: 430)
                 Text(store.settings.action == .terminate ? L("action.terminate.hint") : L("action.notify.hint"))
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.disabled(store.monitoring || store.checking)
+            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
         }
     }
 
@@ -986,6 +1186,16 @@ struct Dashboard: View {
         case .settings:
             VStack(spacing: 16) {
                 protectionSettingsPage
+                navigationToolCard(
+                    title: text("实验性进程沙箱", "Experimental process sandbox"),
+                    subtitle: store.settings.experimentalSandboxEnabled
+                        ? store.sandbox.statusTitle
+                        : text("需要先在保护设置中开启", "Enable it in Protection settings first"),
+                    symbol: "lock.shield",
+                    identifier: "tool-card-sandbox"
+                ) {
+                    protectionSection = .sandbox
+                }
                 navigationToolCard(
                     title: text("Claude Code 登录凭证", "Claude Code sign-in"),
                     subtitle: authenticationSummary,
@@ -1004,7 +1214,12 @@ struct Dashboard: View {
                 }
             }
         case .authentication:
-            AuthenticationPage(controller: store.authentication)
+            AuthenticationPage(
+                controller: store.authentication,
+                launchAction: { store.launchFromAuthentication() }
+            )
+        case .sandbox:
+            SandboxPage(store: store)
         case .advancedNetwork:
             NetworkProtectionPage(store: store)
         }

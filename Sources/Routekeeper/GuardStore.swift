@@ -50,6 +50,7 @@ final class GuardStore {
     var networkFilter = FilterController()
     var capture = CaptureController()
     var authentication = CredentialController()
+    var sandbox: SandboxSession
     var egressAudit = EgressAuditController()
     var events: [GuardEvent] = []
     var notice = ""
@@ -83,6 +84,7 @@ final class GuardStore {
     init(defaults: UserDefaults = .standard, watchNetwork: Bool = true, notificationsEnabled: Bool = true,
          runDiagnostic: @escaping @Sendable (GuardSettings) async -> DiagnosticSnapshot = { await Diagnostics.run(settings: $0) }) {
         preferences = defaults
+        sandbox = SandboxSession(preferences: defaults)
         self.notificationsEnabled = notificationsEnabled
         automaticEgressAuditEnabled = defaults.object(forKey: Self.egressAutomationKey) as? Bool ?? true
         automaticEgressAuditIntervalMinutes = Self.normalizedEgressInterval(
@@ -97,15 +99,27 @@ final class GuardStore {
         networkFilter.refresh()
     }
     var title: String {
-        L10n.t("status.\(policy.phase == .idle ? (checking ? "checking" : "idle") : policy.phase == .armed ? "armed" : "incident")")
+        if settings.experimentalSandboxEnabled {
+            return sandbox.statusTitle
+        }
+        return L10n.t("status.\(policy.phase == .idle ? (checking ? "checking" : "idle") : policy.phase == .armed ? "armed" : "incident")")
     }
-    var symbol: String { policy.phase == .incident ? "exclamationmark.shield.fill" : policy.phase == .armed ? "shield.lefthalf.filled" : "shield" }
+    var symbol: String {
+        if settings.experimentalSandboxEnabled { return sandbox.statusSymbol }
+        return policy.phase == .incident ? "exclamationmark.shield.fill" : policy.phase == .armed ? "shield.lefthalf.filled" : "shield"
+    }
+
+    var sandboxModeActive: Bool {
+        settings.experimentalSandboxEnabled && sandbox.phase.isActive
+    }
+
+    var sandboxModeEnabled: Bool { settings.experimentalSandboxEnabled }
     func log(_ text: String, attention: Bool = false) {
         events.insert(GuardEvent(message: text, isAttention: attention), at: 0)
         if events.count > 60 { events.removeLast(events.count - 60) }
     }
     func check() async {
-        guard !checking, !monitoring, !systemSleeping else { return }
+        guard !settings.experimentalSandboxEnabled, !checking, !monitoring, !systemSleeping else { return }
         checking = true
         let requestEpoch = epoch; let selected = settings
         let result = await diagnostics.run(selected)
@@ -118,6 +132,7 @@ final class GuardStore {
     }
 
     func snapshotForEgressAudit(maxAge: TimeInterval = 45) async -> DiagnosticSnapshot? {
+        guard !settings.experimentalSandboxEnabled else { return nil }
         if !monitoring {
             if let snapshot,
                Date().timeIntervalSince(snapshot.checkedAt) <= maxAge {
@@ -166,7 +181,7 @@ final class GuardStore {
     }
 
     private func runAutomaticEgressAudit(trigger: EgressAuditTrigger) async {
-        guard automaticEgressAuditEnabled, !systemSleeping,
+        guard !settings.experimentalSandboxEnabled, automaticEgressAuditEnabled, !systemSleeping,
               !egressAudit.busy, !checking else { return }
         guard let snapshot = await snapshotForEgressAudit(maxAge: 45) else { return }
         let previousLevel = egressAudit.report?.assessment.level
@@ -190,6 +205,12 @@ final class GuardStore {
     }
 
     func autoAdoptExit() async {
+        guard !settings.experimentalSandboxEnabled else {
+            notice = L10n.resolvedEnglish
+                ? "Turn off experimental sandbox mode before changing ordinary network monitoring."
+                : "请先关闭实验性进程沙箱模式，再调整普通网络监控。"
+            return
+        }
         guard !monitoring else {
             notice = L10n.resolvedEnglish ? "Stop monitoring before detecting an exit." : "请先停止监控，再获取出口。"
             return
@@ -215,6 +236,12 @@ final class GuardStore {
         }
     }
     func adoptObservedExit(family: IPFamily) async {
+        guard !settings.experimentalSandboxEnabled else {
+            notice = L10n.resolvedEnglish
+                ? "Turn off experimental sandbox mode before changing ordinary network monitoring."
+                : "请先关闭实验性进程沙箱模式，再调整普通网络监控。"
+            return
+        }
         guard !monitoring else {
             notice = L10n.resolvedEnglish ? "Stop monitoring before detecting an exit." : "请先停止监控，再获取出口。"
             return
@@ -234,7 +261,14 @@ final class GuardStore {
         }
     }
     func start() async {
-        guard !checking, !monitoring, !systemSleeping else { return }
+        guard !settings.experimentalSandboxEnabled, !checking, !monitoring, !systemSleeping else {
+            if settings.experimentalSandboxEnabled {
+                notice = L10n.resolvedEnglish
+                    ? "Turn off experimental sandbox mode before starting ordinary monitoring."
+                    : "请先关闭“实验性进程沙箱”模式，再开启普通监控。"
+            }
+            return
+        }
         checking = true; epoch += 1
         let requestEpoch = epoch; let selected = settings
         let result = await diagnostics.run(selected)
@@ -275,6 +309,18 @@ final class GuardStore {
         }
     }
     func environmentChanged(_ reason: String, sleeping: Bool, waking: Bool = false) {
+        if sandboxModeActive {
+            if sleeping { systemSleeping = true }
+            if waking { systemSleeping = false }
+            sandbox.invalidateNetwork(reason: reason)
+            log(
+                L10n.resolvedEnglish
+                    ? "Network changed while sandbox mode was active. Sandbox network access was paused."
+                    : "沙箱模式运行期间网络状态发生变化，已暂停沙箱网络访问。",
+                attention: true
+            )
+            return
+        }
         if sleeping { systemSleeping = true }
         if waking { systemSleeping = false }
         epoch += 1
@@ -354,6 +400,69 @@ final class GuardStore {
               settings.protectDesktop, let path = latest.desktopPath else { notice = L10n.resolvedEnglish ? "Pass self-check and enable desktop monitoring first." : "请先通过检查并开启桌面版监控。"; return }
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: .init()) { _, error in
             if let error { Task { @MainActor in self.notice = "\(L10n.resolvedEnglish ? "Launch failed: " : "启动失败：")\(error.localizedDescription)" } }
+        }
+    }
+
+    func prepareSandbox() async {
+        guard settings.experimentalSandboxEnabled else {
+            notice = L10n.resolvedEnglish
+                ? "Turn on experimental sandbox mode first."
+                : "请先开启“实验性进程沙箱”模式。"
+            return
+        }
+        if monitoring { stop() }
+        await sandbox.prepare()
+        log(sandbox.statusTitle, attention: sandbox.phase == .failed)
+    }
+
+    func launchClaudeInSandbox() {
+        guard let token = authentication.launchToken() else {
+            sandbox.message = L10n.resolvedEnglish
+                ? "Save a Claude Code sign-in token in Keychain before launching the isolated session."
+                : "请先在“Claude Code 登录凭证”中保存登录凭证，再启动隔离会话。"
+            return
+        }
+        sandbox.launchClaudeCode(token: token)
+        log(
+            L10n.resolvedEnglish
+                ? "Requested an isolated Claude Code launch in Terminal."
+                : "已在终端中请求启动隔离的 Claude Code。"
+        )
+    }
+
+    func launchFromAuthentication() {
+        if settings.experimentalSandboxEnabled {
+            guard sandbox.phase == .running || sandbox.phase == .networkPaused else {
+                notice = L10n.resolvedEnglish
+                    ? "Create and verify an isolated session before launching Claude Code."
+                    : "请先创建并验证隔离会话，再启动 Claude Code。"
+                return
+            }
+            launchClaudeInSandbox()
+        } else {
+            authentication.launchClaudeCode()
+        }
+    }
+
+    func pauseSandboxNetwork() {
+        sandbox.pauseNetwork()
+        log(sandbox.statusTitle, attention: true)
+    }
+
+    func resumeSandboxNetwork() async {
+        await sandbox.resumeNetwork()
+        log(sandbox.statusTitle, attention: sandbox.phase == .networkPaused)
+    }
+
+    func endSandboxSession() async {
+        await sandbox.endSession()
+        log(sandbox.statusTitle)
+    }
+
+    func prepareForTermination() async {
+        stop()
+        if sandbox.phase.isActive {
+            await sandbox.endSession()
         }
     }
     func exportReport(redacted: Bool = false) {
