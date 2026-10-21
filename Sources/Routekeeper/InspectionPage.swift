@@ -5,6 +5,7 @@ struct InspectionPage: View {
     @Bindable var store: GuardStore
     @Bindable var audit: EgressAuditController
     let onOpenProtection: () -> Void
+    let onOpenAdvancedNetwork: () -> Void
 
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
     @State private var showChecks = false
@@ -16,6 +17,11 @@ struct InspectionPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             summaryPanel
+            GatewayVerificationPage(
+                controller: store.gatewayVerification,
+                mode: store.settings.gatewayProtectionMode,
+                onOpenAdvancedNetwork: onOpenAdvancedNetwork
+            )
             if !attentionItems.isEmpty {
                 attentionPanel
             }

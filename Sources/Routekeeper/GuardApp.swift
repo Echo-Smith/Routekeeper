@@ -32,9 +32,83 @@ enum AppNavigationRequest {
 final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     var openMainWindow: (() -> Void)?
     private var attachedWindow: NSWindow?
+    private var statusItem: NSStatusItem?
+    private var statusPopover: NSPopover?
+    private var statusRefreshTask: Task<Void, Never>?
+    private weak var store: GuardStore?
+
+    var isStatusItemConfigured: Bool {
+        statusItem?.button?.image != nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         refreshDockIcon()
+    }
+
+    func configureStatusItem(store: GuardStore) {
+        guard self.store !== store else { return }
+        self.store = store
+
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.button?.imagePosition = .imageOnly
+            item.button?.target = self
+            item.button?.action = #selector(toggleStatusPopover)
+            item.button?.toolTip = "Routekeeper"
+            statusItem = item
+        }
+
+        if statusPopover == nil {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+            popover.contentSize = NSSize(width: 320, height: 244)
+            popover.contentViewController = NSHostingController(
+                rootView: GuardMenu(store: store, appDelegate: self)
+            )
+            statusPopover = popover
+        }
+
+        refreshStatusItem()
+        statusRefreshTask?.cancel()
+        statusRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshStatusItem()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        statusRefreshTask?.cancel()
+        statusRefreshTask = nil
+        if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+        }
+        statusItem = nil
+        statusPopover = nil
+    }
+
+    @objc private func toggleStatusPopover() {
+        guard let button = statusItem?.button, let popover = statusPopover else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    private func refreshStatusItem() {
+        guard let button = statusItem?.button, let store else { return }
+        let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+        let image = NSImage(
+            systemSymbolName: store.symbol,
+            accessibilityDescription: "Routekeeper"
+        )?.withSymbolConfiguration(configuration)
+        image?.isTemplate = true
+        button.image = image
+        button.toolTip = "Routekeeper · \(store.title)"
     }
 
     private func refreshDockIcon() {
@@ -64,7 +138,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func mainWindowWillClose(_ notification: Notification) {
-        // Keep MenuBarExtra and monitoring alive while removing the Dock entry.
+        // Keep the explicit status item and monitoring alive while removing the Dock entry.
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -82,6 +156,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel(page: GuardPage, protectionSection: ProtectionSection? = nil) {
+        statusPopover?.performClose(nil)
         NSApp.setActivationPolicy(.regular)
         refreshDockIcon()
         AppNavigationRequest.request(page, protectionSection: protectionSection)
@@ -199,6 +274,7 @@ struct GuardApp: App {
                 .frame(minWidth: 920, minHeight: 600)
                 .background(WindowCommandBridge(delegate: appDelegate))
                 .task {
+                    appDelegate.configureStatusItem(store: store)
                     if store.snapshot == nil { await store.check() }
                     store.startEgressAuditAutomation()
                 }
@@ -213,9 +289,6 @@ struct GuardApp: App {
             CommandGroup(replacing: .appTermination) {
                 Button(L("menu.quit")) { confirmQuit(store) }.keyboardShortcut("q")
             }
-        }
-        MenuBarExtra("Routekeeper", systemImage: store.symbol) {
-            GuardMenu(store: store, appDelegate: appDelegate)
         }
     }
 }
@@ -246,43 +319,52 @@ struct GuardMenu: View {
     @Bindable var store: GuardStore
     let appDelegate: RoutekeeperAppDelegate
     var body: some View {
-        Text(store.title)
-        if store.settings.experimentalSandboxEnabled {
-            Text(store.sandbox.message)
-        } else {
-            Text(L10n.resolvedEnglish
-                 ? "Target: \(store.settings.targetIP.isEmpty ? "not set" : store.settings.targetIP)"
-                 : "目标：\(store.settings.targetIP.isEmpty ? "尚未设置" : store.settings.targetIP)")
-        }
-        Divider()
-        Button(L("menu.openPanel")) {
-            appDelegate.showChecksPanel()
-        }
-        if store.settings.experimentalSandboxEnabled {
-            Button(L10n.resolvedEnglish ? "Open experimental sandbox" : "打开实验性进程沙箱") {
-                appDelegate.showSandboxPanel()
+        VStack(alignment: .leading, spacing: 10) {
+            Text(store.title)
+                .font(.headline)
+            if store.settings.experimentalSandboxEnabled {
+                Text(store.sandbox.message)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(L10n.resolvedEnglish
+                     ? "Target: \(store.settings.targetIP.isEmpty ? "not set" : store.settings.targetIP)"
+                     : "目标：\(store.settings.targetIP.isEmpty ? "尚未设置" : store.settings.targetIP)")
+                    .foregroundStyle(.secondary)
             }
-            if store.sandbox.phase == .running {
-                Button(L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络") {
-                    store.pauseSandboxNetwork()
-                }
-            } else if store.sandbox.phase == .networkPaused {
-                Button(L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络") {
-                    Task { await store.resumeSandboxNetwork() }
-                }
+            Divider()
+            Button(L("menu.openPanel")) {
+                appDelegate.showChecksPanel()
             }
-            if store.sandbox.phase.isActive {
-                Button(L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话") {
-                    Task { await store.endSandboxSession() }
+            if store.settings.experimentalSandboxEnabled {
+                Button(L10n.resolvedEnglish ? "Open experimental sandbox" : "打开实验性进程沙箱") {
+                    appDelegate.showSandboxPanel()
                 }
+                if store.sandbox.phase == .running {
+                    Button(L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络") {
+                        store.pauseSandboxNetwork()
+                    }
+                } else if store.sandbox.phase == .networkPaused {
+                    Button(L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络") {
+                        Task { await store.resumeSandboxNetwork() }
+                    }
+                }
+                if store.sandbox.phase.isActive {
+                    Button(L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话") {
+                        Task { await store.endSandboxSession() }
+                    }
+                }
+            } else if store.monitoring {
+                Button(L("menu.stopMonitor")) { store.stop() }
+            } else {
+                Button(L("menu.runCheck")) { Task { await store.check() } }.disabled(store.checking)
             }
-        } else if store.monitoring {
-            Button(L("menu.stopMonitor")) { store.stop() }
-        } else {
-            Button(L("menu.runCheck")) { Task { await store.check() } }.disabled(store.checking)
+            Divider()
+            Button(L("menu.quitShort")) { confirmQuit(store) }
         }
-        Divider()
-        Button(L("menu.quitShort")) { confirmQuit(store) }
+        .buttonStyle(.plain)
+        .padding(14)
+        .frame(width: 320, alignment: .leading)
     }
 }
 

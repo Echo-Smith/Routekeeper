@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import GuardCore
+@testable import Routekeeper
 
 final class IsolationModelsTests: XCTestCase {
     private var root: URL!
@@ -134,6 +135,74 @@ final class IsolationModelsTests: XCTestCase {
             }
         }
         XCTAssertTrue(configuration(upstream: IsolationUpstream(host: "::1", port: 1080, protocolType: .socks5)).upstream.isValid)
+    }
+
+    func testDetectsAndMatchesSystemProxyWithoutGuessingWhenDisabled() {
+        let detected = SystemProxyDescriptor.descriptor(from: [
+            "HTTPSEnable": NSNumber(value: true),
+            "HTTPSProxy": "localhost",
+            "HTTPSPort": NSNumber(value: 7890),
+            "HTTPEnable": NSNumber(value: true),
+            "HTTPProxy": "127.0.0.1",
+            "HTTPPort": NSNumber(value: 10809)
+        ])
+        XCTAssertEqual(
+            detected,
+            .init(host: "localhost", port: 7890, protocolType: .httpConnect)
+        )
+        XCTAssertTrue(IsolationUpstream(host: "127.0.0.1", port: 7890, protocolType: .httpConnect).matches(detected))
+        XCTAssertFalse(IsolationUpstream(host: "127.0.0.1", port: 10809, protocolType: .httpConnect).matches(detected))
+        XCTAssertFalse(IsolationUpstream(host: "127.0.0.1", port: 7890, protocolType: .socks5).matches(detected))
+        XCTAssertNil(SystemProxyDescriptor.descriptor(from: [
+            "HTTPSEnable": NSNumber(value: false),
+            "HTTPSProxy": "127.0.0.1",
+            "HTTPSPort": NSNumber(value: 7890)
+        ]))
+    }
+
+    func testSessionLocaleAndSavedExitHelpersStayConsistent() {
+        XCTAssertEqual(IsolationSessionEnvironment.localeIdentifier(for: "Asia/Tokyo"), "ja_JP.UTF-8")
+        XCTAssertEqual(IsolationSessionEnvironment.localeIdentifier(for: "America/Los_Angeles"), "en_US.UTF-8")
+        XCTAssertEqual(IsolationSessionEnvironment.languageIdentifier(forLocale: "zh_CN.UTF-8"), "zh")
+
+        let exits = IsolationExpectedExits(ipv4: "203.0.113.13", ipv6: "2001:db8::1")
+        XCTAssertTrue(exits.hasAny)
+        XCTAssertTrue(exits.contains("203.0.113.13"))
+        XCTAssertTrue(exits.contains("2001:db8::1"))
+        XCTAssertFalse(exits.contains("1.1.1.1"))
+        XCTAssertFalse(IsolationExpectedExits().hasAny)
+    }
+
+    func testSandboxPreflightParsesIPv6ExitAndNewBoundaryChecks() {
+        let output = """
+        timezone=1
+        session-locale=1
+        home-write=1
+        workspace-write=1
+        exchange-write=1
+        original-write=1
+        control-read=1
+        child-inherit=1
+        direct-network=1
+        direct-dns=1
+        direct-udp=1
+        relay-network=1
+        direct-claude=1
+        claude-relay=1
+        claude-exit-ip=2001:db8::1
+        claude-exit-match=1
+        loopback-listener=1
+        external-app=1
+        complete
+        """
+        let checks = SandboxSession.preflightChecks(output)
+        XCTAssertTrue(checks.allSatisfy(\.passed))
+        XCTAssertEqual(checks.first(where: { $0.id == "claude-exit-match" })?.detail, "Claude 路径返回 2001:db8::1，与已保存出口一致")
+        XCTAssertTrue(checks.contains { $0.id == "loopback-listener" })
+        XCTAssertTrue(checks.contains { $0.id == "external-app" })
+
+        let mismatch = SandboxSession.preflightChecks(output.replacingOccurrences(of: "claude-exit-match=1", with: "claude-exit-match=0"))
+        XCTAssertEqual(mismatch.first(where: { $0.id == "claude-exit-match" })?.passed, false)
     }
 
     func testSandboxProfileOnlyWritesSessionWorkspaceExchangeAndLoopbackPort() throws {

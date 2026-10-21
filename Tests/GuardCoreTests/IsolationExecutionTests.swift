@@ -49,6 +49,12 @@ final class IsolationExecutionTests: XCTestCase {
         if /usr/bin/host -W 1 example.com >/dev/null 2>&1; then exit 24; fi
         if /usr/bin/nc -u -z -w 1 1.1.1.1 53 >/dev/null 2>&1; then exit 25; fi
         if ! /usr/bin/nc -z -w 1 127.0.0.1 \(relay.port) >/dev/null 2>&1; then exit 26; fi
+        /usr/bin/nc -l 127.0.0.1 0 >/dev/null 2>&1 &
+        listener_pid=$!
+        /bin/sleep 0.2
+        if /bin/kill -0 "$listener_pid" >/dev/null 2>&1; then /bin/kill "$listener_pid" >/dev/null 2>&1 || true; exit 27; fi
+        wait "$listener_pid" 2>/dev/null || true
+        if /usr/bin/osascript -e 'path to application id "com.apple.Safari"' >/dev/null 2>&1; then exit 28; fi
         printf 'profile-passed' > "$ISOLATION_WORKSPACE/result"
         """
         try Data(scriptText.utf8).write(to: script)

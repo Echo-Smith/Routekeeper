@@ -13,7 +13,7 @@ Release 主应用和系统扩展编译成功。普通应用包的 Info.plist 与
 
 ## 需要签名环境完成的实机验收
 
-本机查询到零个有效代码签名身份，且没有付费 Apple Developer Program。免费 Personal Team 不能取得 `content-filter-provider-systemextension` 或系统扩展安装授权，因此下面项目没有执行，不能标为通过。
+开发 Profile 使用 `content-filter-provider`，Developer ID 对外分发使用 `content-filter-provider-systemextension`。免费 Personal Team 不能取得 Content Filter 或系统扩展安装授权，因此下述实机验收必须使用付费团队的有效签名与 profiles 完成。
 
 1. 在付费 Apple Developer Program 团队中使用 Apple Development 或 Developer ID 身份、证书和对应 profiles 构建；在 `/Applications` 安装，用户批准系统扩展和过滤配置。核实扩展启用状态及提供者实际运行日志，配置保存成功不等于运行成功。
 2. 退出全部所选桌面/Code，清除其旧连接；启用前记录正常使用的本地代理地址。不要通过修改全机防火墙进行替代验收。

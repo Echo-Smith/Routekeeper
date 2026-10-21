@@ -9,6 +9,10 @@ import GuardCore
 @MainActor @Observable
 final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
     static let bundleID = "local.routekeeper.macos.filter"
+    private static let contentFilterEntitlements: Set<String> = [
+        "content-filter-provider",
+        "content-filter-provider-systemextension"
+    ]
     var configured = false
     var busy = false
     var message = "尚未读取系统过滤配置"
@@ -31,9 +35,9 @@ final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
         }
         guard let appEntitlements = appInfo[kSecCodeInfoEntitlementsDict as String] as? [String: Any],
               appEntitlements["com.apple.developer.system-extension.install"] as? Bool == true,
-              (appEntitlements["com.apple.developer.networking.networkextension"] as? [String] ?? []).contains("content-filter-provider-systemextension"),
+              Self.hasContentFilterEntitlement(appEntitlements),
               let extEntitlements = extInfo[kSecCodeInfoEntitlementsDict as String] as? [String: Any],
-              (extEntitlements["com.apple.developer.networking.networkextension"] as? [String] ?? []).contains("content-filter-provider-systemextension") else {
+              Self.hasContentFilterEntitlement(extEntitlements) else {
             return "应用或系统扩展缺少网络过滤授权"
         }
         guard let appProfile = Self.provisioningInformation(at: Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")),
@@ -45,6 +49,10 @@ final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
             return "provisioning profile 的 Team ID、App ID 或授权不匹配"
         }
         return nil
+    }
+    private static func hasContentFilterEntitlement(_ entitlements: [String: Any]) -> Bool {
+        let providers = Set((entitlements["com.apple.developer.networking.networkextension"] as? [String]) ?? [])
+        return !providers.isDisjoint(with: contentFilterEntitlements)
     }
     private static func signingInformation(for url: URL) -> [String: Any]? {
         var staticCode: SecStaticCode?; var info: CFDictionary?
@@ -71,7 +79,7 @@ final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
         let identifiers = [entitlements["application-identifier"] as? String, entitlements["com.apple.application-identifier"] as? String].compactMap { $0 }
         guard identifiers.contains(where: { $0.hasSuffix(".\(bundleID)") }) else { return false }
         guard !requireInstall || entitlements["com.apple.developer.system-extension.install"] as? Bool == true else { return false }
-        return (entitlements["com.apple.developer.networking.networkextension"] as? [String] ?? []).contains("content-filter-provider-systemextension")
+        return hasContentFilterEntitlement(entitlements)
     }
     func refresh() {
         guard canInstall else {
@@ -161,19 +169,62 @@ final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
         }
     }
     func disable() {
-        guard !busy else { return }; busy = true
-        let manager = NEFilterManager.shared()
-        manager.loadFromPreferences { [weak self] error in
-            Task { @MainActor in
-                guard let self else { return }
-                if let error { self.finish(error); return }
-                let manager = NEFilterManager.shared()
-                guard manager.providerConfiguration?.filterDataProviderBundleIdentifier == Self.bundleID else {
-                    self.finish(NSError(domain: "Routekeeper", code: 2, userInfo: [NSLocalizedDescriptionKey: "未找到本应用过滤配置，不修改其他过滤器"]))
-                    return
+        Task { [weak self] in
+            _ = await self?.disableAndWait()
+        }
+    }
+
+    func disableAndWait() async -> Error? {
+        guard !busy else {
+            return NSError(
+                domain: "Routekeeper",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "系统过滤正在执行其他操作，请稍后重试"]
+            )
+        }
+        busy = true
+        return await withCheckedContinuation { continuation in
+            NEFilterManager.shared().loadFromPreferences { [weak self] error in
+                Task { @MainActor in
+                    guard let self else {
+                        continuation.resume(returning: NSError(
+                            domain: "Routekeeper",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: "Routekeeper 已结束系统过滤操作"]
+                        ))
+                        return
+                    }
+                    if let error {
+                        self.finish(error)
+                        continuation.resume(returning: error)
+                        return
+                    }
+                    let manager = NEFilterManager.shared()
+                    guard manager.providerConfiguration?.filterDataProviderBundleIdentifier == Self.bundleID else {
+                        self.busy = false
+                        self.pendingScope = nil
+                        self.configured = false
+                        self.installedScope = nil
+                        self.message = "未找到本应用过滤配置，没有修改其他过滤器"
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    manager.isEnabled = false
+                    manager.saveToPreferences { error in
+                        Task { @MainActor in
+                            self.busy = false
+                            self.pendingScope = nil
+                            if let error {
+                                self.message = "系统过滤关闭失败：\(error.localizedDescription)"
+                            } else {
+                                self.configured = false
+                                self.installedScope = nil
+                                self.message = "系统过滤已关闭"
+                            }
+                            continuation.resume(returning: error)
+                        }
+                    }
                 }
-                manager.isEnabled = false
-                manager.saveToPreferences { error in Task { @MainActor in self.finish(error) } }
             }
         }
     }

@@ -38,7 +38,7 @@ enum ProtectionSection: String, CaseIterable, Identifiable {
 }
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, events, cleanup, disclaimer, about
+    case general, events, cleanup, localData, disclaimer, about
 
     var id: String { rawValue }
 
@@ -47,6 +47,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: return L10n.resolvedEnglish ? "General" : "通用"
         case .events: return L10n.resolvedEnglish ? "Run log" : "运行记录"
         case .cleanup: return L10n.resolvedEnglish ? "Cleanup" : "清理"
+        case .localData: return L10n.resolvedEnglish ? "Local data" : "本地信息"
         case .disclaimer: return L10n.resolvedEnglish ? "Disclaimer" : "免责声明"
         case .about: return L10n.resolvedEnglish ? "About" : "关于"
         }
@@ -68,10 +69,154 @@ struct Dashboard: View {
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("routekeeper.disclaimer-accepted-version") private var disclaimerAcceptedVersion = ""
     @State private var showDisclaimerGate = false
-    var needsOnboarding: Bool {
-        !store.settings.experimentalSandboxEnabled && !store.monitoring && (store.snapshot == nil ||
-            (store.settings.target(for: .ipv4) == nil && store.settings.target(for: .ipv6) == nil))
+    @State private var confirmClearLocalData = false
+    @State private var localDataResetNotice = ""
+    private var homeHasProxyPath: Bool {
+        guard let snapshot = store.snapshot else { return false }
+        return ["proxy-client", "proxy"].allSatisfy { id in
+            snapshot.checks.first(where: { $0.id == id })?.level == .passed
+        }
     }
+
+    private var homeCheckReady: Bool {
+        store.snapshot?.ready == true
+    }
+
+    private var homeHasSavedExit: Bool {
+        store.settings.target(for: .ipv4) != nil
+            || store.settings.target(for: .ipv6) != nil
+    }
+
+    private var homeGatewayReadyForMonitoring: Bool {
+        store.settings.gatewayProtectionMode == .off
+            || store.gatewayVerification.isFreshlyVerified(for: store.settings.gatewayProtectionMode)
+    }
+
+    private var homeSetupSteps: [HomeSetupStepItem] {
+        let completed = [
+            homeHasProxyPath,
+            homeCheckReady,
+            homeHasSavedExit,
+            store.monitoring
+        ]
+        let titles = [
+            text("1  代理", "1  Proxy"),
+            text("2  体检", "2  Check"),
+            text("3  出口", "3  Exit"),
+            text("4  监控", "4  Monitor")
+        ]
+        var currentAssigned = false
+        return titles.indices.map { index in
+            let state: HomeSetupStepState
+            if completed[index] {
+                state = .complete
+            } else if store.snapshot != nil && (index == 0 || index == 1) {
+                state = .attention
+            } else if !currentAssigned {
+                state = .current
+                currentAssigned = true
+            } else {
+                state = .pending
+            }
+            return HomeSetupStepItem(
+                id: index,
+                title: titles[index],
+                detail: homeSetupStepDetail(index, state: state),
+                state: state
+            )
+        }
+    }
+
+    private func homeSetupStepDetail(_ index: Int, state: HomeSetupStepState) -> String {
+        switch index {
+        case 0:
+            if state == .complete {
+                return text("已识别代理客户端和系统代理入口。", "Proxy client and system proxy entry detected.")
+            }
+            return state == .attention
+                ? text("体检没有识别到可用代理，请先打开代理。", "The check found no usable proxy. Start your proxy first.")
+                : text("打开代理客户端，选好节点并开启系统代理或 TUN。", "Start your proxy, choose a node and enable system proxy or TUN.")
+        case 1:
+            if state == .complete {
+                return text("本次体检的必需项目已通过。", "Required checks passed in the latest run.")
+            }
+            return state == .attention
+                ? text("体检已经运行，但仍有项目要多看一眼。", "The check ran, but some items still need attention.")
+                : text("运行一次完整体检，看看代理和出口是否正常。", "Run a full check to verify the proxy path and exit.")
+        case 2:
+            if let exit = store.settings.target(for: .ipv4) ?? store.settings.target(for: .ipv6) {
+                return text("已保存 \(exit)", "Saved \(exit)")
+            }
+            return text("结果一致时点“自动获取出口”。", "When results match, choose “Auto-detect exit.”")
+        case 3:
+            if store.monitoring {
+                return text("监控正在运行。", "Monitoring is running.")
+            }
+            return homeGatewayReadyForMonitoring
+                ? text("条件满足后点“开启监控”。", "When ready, choose “Start monitoring.”")
+                : text("先完成所选代理网关的断开与恢复测试。", "Finish the selected proxy-gateway disconnect and recovery checks.")
+        default:
+            return ""
+        }
+    }
+
+    private var homeSetupAction: HomeSetupAction {
+        if !homeHasProxyPath || store.snapshot == nil || !homeCheckReady || !homeHasSavedExit {
+            return .inspection
+        }
+        if !homeGatewayReadyForMonitoring {
+            return .gatewayCheck
+        }
+        return .startMonitoring
+    }
+
+    private var homeSetupAdvice: String {
+        switch homeSetupAction {
+        case .inspection:
+            if store.snapshot == nil {
+                return text(
+                    "先打开代理，再运行网络体检。体检会检查代理路径、系统路由和出口是否对得上。",
+                    "Start the proxy, then run a network check. It compares the proxy path, system route and exit."
+                )
+            }
+            if !homeHasProxyPath {
+                return text(
+                    "当前没有识别到可用代理。确认代理客户端正在运行、系统代理或 TUN 已开启，然后重新体检。",
+                    "No usable proxy was detected. Confirm the proxy client is running and system proxy or TUN is enabled, then check again."
+                )
+            }
+            if !homeCheckReady {
+                return text(
+                    "体检还有一些项目没有通过。先查看待处理项，再重新检查。",
+                    "Some checks have not passed. Review the items that need attention and run the check again."
+                )
+            }
+            return text(
+                "点“自动获取出口”保存当前一致结果，之后才能开启监控。",
+                "Use Auto-detect exit to save the current matching result before starting monitoring."
+            )
+        case .gatewayCheck:
+            return text(
+                "你选择了代理网关保护。按提示完成节点断开、代理退出和恢复后的检查。",
+                "Proxy gateway protection is selected. Complete the node-failure, client-exit and recovery checks."
+            )
+        case .startMonitoring:
+            return text(
+                "代理、出口和保护范围已经准备好。开启后，Routekeeper 会定期复查。",
+                "Proxy, exit and protection scope are ready. Routekeeper will keep checking after monitoring starts."
+            )
+        }
+    }
+
+    private func performHomeSetupAction(_ action: HomeSetupAction) {
+        switch action {
+        case .inspection, .gatewayCheck:
+            selectPage(.inspection)
+        case .startMonitoring:
+            Task { await store.start() }
+        }
+    }
+
     var statusColor: Color {
         if store.settings.experimentalSandboxEnabled {
             switch store.sandbox.phase {
@@ -207,7 +352,7 @@ struct Dashboard: View {
                     selectPage(.settings)
                 }
                 if !sidebarCollapsed {
-                    Text("v0.3.11").font(.caption2).foregroundStyle(.tertiary)
+                    Text("v0.3.12").font(.caption2).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 2)
                 }
@@ -262,14 +407,8 @@ struct Dashboard: View {
     }
 
     var storeTitle: String {
-        if store.settings.experimentalSandboxEnabled {
-            return store.sandbox.statusTitle
-        }
-        switch store.policy.phase {
-        case .idle: return store.checking ? L("status.checking") : L("status.idle")
-        case .armed: return L("status.armed")
-        case .incident: return L("status.incident")
-        }
+        if store.checking { return L("status.checking") }
+        return store.title
     }
 
     var pageHeader: some View {
@@ -361,6 +500,18 @@ struct Dashboard: View {
         if store.checking { return L("status.checking") }
         if store.policy.phase == .incident { return L("status.incident") }
         if store.monitoring { return L("status.armed") }
+        if store.settings.gatewayProtectionMode != .off {
+            switch store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) {
+            case .verified:
+                break
+            case .needsNodeFailureTest: return text("待测节点断开", "Node test pending")
+            case .needsClientExitTest: return text("待测代理退出", "Client test pending")
+            case .needsRecovery: return text("待恢复代理", "Restore proxy")
+            case .failed: return text("代理网关未通过", "Gateway failed")
+            case .expired: return text("网关证据已过期", "Gateway evidence expired")
+            case .unverified: return text("代理网关待检查", "Gateway not checked")
+            }
+        }
         guard let snapshot = store.snapshot else { return L("capsule.noCheck") }
         guard let family = snapshot.proxyIP.map(IPFamily.of),
               let target = store.settings.target(for: family) else { return L("capsule.noTarget") }
@@ -375,7 +526,15 @@ struct Dashboard: View {
             if store.settings.experimentalSandboxEnabled {
                 sandboxModeNotice
             } else {
-                InspectionPage(store: store, audit: store.egressAudit) { selectPage(.protection) }
+                InspectionPage(
+                    store: store,
+                    audit: store.egressAudit,
+                    onOpenProtection: { selectPage(.protection) },
+                    onOpenAdvancedNetwork: {
+                        selectPage(.protection)
+                        protectionSection = .advancedNetwork
+                    }
+                )
             }
         case .protection: protectionPage
         case .settings: settingsPage
@@ -388,7 +547,12 @@ struct Dashboard: View {
                 homeSandboxCard
                 homeSandboxBoundaryCard
             } else {
+                if !store.monitoring {
+                    homeSetupGuideCard
+                }
                 homeStatusCard
+                homeSandboxIntroCard
+                homeGatewayCard
                 HStack(alignment: .top, spacing: 16) {
                     homeProtectionCard
                     homeEgressCard
@@ -492,6 +656,9 @@ struct Dashboard: View {
                 Label(text("断开网络后已有连接与新连接都会失败，不会自动改走直连。",
                            "Turning the network off closes existing connections and prevents new direct or relayed connections."),
                       systemImage: "wifi.slash")
+                Label(text("localhost 项目服务器和默认浏览器启动会被拒绝，避免绕过中继。",
+                           "Localhost project servers and default-browser launches are blocked to prevent relay bypasses."),
+                      systemImage: "rectangle.slash")
                 Label(text("它仍是实验性进程隔离，不是虚拟机，也不能保证账号或设备指纹结果。",
                            "This remains experimental process isolation, not a virtual machine, and cannot guarantee account or device-fingerprint outcomes."),
                       systemImage: "exclamationmark.shield")
@@ -499,6 +666,144 @@ struct Dashboard: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var homeSetupGuideCard: some View {
+        let steps = homeSetupSteps
+        let action = homeSetupAction
+        return GuardCard(
+            title: text("开始使用", "Get started"),
+            subtitle: text(
+                "按顺序完成下面四步，不需要先开启沙箱。每一步都会告诉你现在该做什么。",
+                "Complete these four steps in order. The sandbox is optional and is not required for ordinary monitoring."
+            )
+        ) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(steps) { step in
+                    homeSetupStep(step)
+                }
+            }
+
+            AppHairline()
+
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: action.symbol)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(action.color)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        action.color.opacity(0.10),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(text("下一步", "Next step"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(action.color)
+                    Text(homeSetupAdvice)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 10)
+                Button(action.title) {
+                    performHomeSetupAction(action)
+                }
+                .routekeeperProminentButton()
+                .disabled(store.checking)
+                .accessibilityIdentifier("home-setup-action")
+            }
+        }
+    }
+
+    private func homeSetupStep(_ step: HomeSetupStepItem) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: step.state.symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(step.state.color)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        step.state.color.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+                Text(step.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(step.state == .pending ? .secondary : .primary)
+            }
+            Text(step.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 68, alignment: .topLeading)
+        .padding(10)
+        .background(
+            step.state.color.opacity(step.state == .pending ? 0.025 : 0.065),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(step.state.color.opacity(step.state == .pending ? 0.06 : 0.16), lineWidth: 0.7)
+        }
+    }
+
+    private var homeSandboxIntroCard: some View {
+        GuardCard(
+            title: text("可选：实验性进程沙箱", "Optional: experimental process sandbox"),
+            subtitle: text(
+                "普通网络监控已经可以独立使用；沙箱用于进一步限制 Claude Code 能改哪些文件、能从哪里联网。",
+                "Ordinary monitoring works on its own. The sandbox adds narrower file and network boundaries for Claude Code."
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 9) {
+                Label(
+                    text(
+                        "适合想把修改留在项目副本里，或希望代理断开时 Claude Code 直接无法联网的情况。",
+                        "Useful when you want changes kept in a project copy or want Claude Code to fail closed when the proxy is unavailable."
+                    ),
+                    systemImage: "folder.badge.questionmark"
+                )
+                Label(
+                    text(
+                        "它会复制项目、限制可访问目录，并把网络收束到 Routekeeper 的本地中继。",
+                        "It copies the project, limits accessible folders and routes network traffic through the Routekeeper relay."
+                    ),
+                    systemImage: "arrow.triangle.branch"
+                )
+                Label(
+                    text(
+                        "开启后普通网络监控会暂停；两套模式不会同时运行。",
+                        "Ordinary monitoring pauses while sandbox mode is on; the two modes do not run together."
+                    ),
+                    systemImage: "pause.circle"
+                )
+                Label(
+                    text(
+                        "它依赖 macOS 的实验接口，不是虚拟机，也不保证兼容性、账号判断或设备指纹结果。",
+                        "It relies on experimental macOS interfaces. It is not a virtual machine and cannot guarantee compatibility, account decisions or device-fingerprint outcomes."
+                    ),
+                    systemImage: "exclamationmark.shield"
+                )
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Text(text("需要这些额外限制时再开启。", "Enable it only when you need these additional limits."))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    protectionSection = .settings
+                    selectPage(.protection)
+                } label: {
+                    Label(text("了解并设置沙箱", "Review sandbox settings"), systemImage: "lock.shield")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("home-sandbox-intro")
+            }
         }
     }
 
@@ -565,22 +870,6 @@ struct Dashboard: View {
                 }
             }
 
-            if needsOnboarding {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        setupStep(1, text("检测网络", "Check network"))
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                        setupStep(2, text("确认出口", "Confirm exits"))
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                        setupStep(3, text("开启监控", "Start monitoring"))
-                    }
-                    Text(text("先完成一次网络体检，Routekeeper 会读取一致的 IPv4/IPv6 出口。",
-                              "Run one network check first. Routekeeper will read matching IPv4/IPv6 exits."))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                AppHairline()
-            }
-
             VStack(spacing: 0) {
                 homeSummaryRow(id: "target", title: L("overview.tile.target"), symbol: "target")
                 AppHairline()
@@ -629,6 +918,42 @@ struct Dashboard: View {
         }
         .padding(22)
         .cardSurface(corner: 22)
+    }
+
+    private var homeGatewayCard: some View {
+        let mode = store.settings.gatewayProtectionMode
+        let status = store.gatewayVerification.status(for: mode)
+        return GuardCard(
+            title: text("代理网关", "Proxy gateway"),
+            subtitle: text(
+                "检查代理可用、节点断开失败关闭，以及代理退出后不会回落直连。",
+                "Check proxy reachability, fail-closed behavior with the node unavailable, and no direct fallback after the client exits."
+            )
+        ) {
+            HStack(spacing: 12) {
+                Image(systemName: homeGatewaySymbol(status))
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(homeGatewayColor(status))
+                    .frame(width: 38, height: 38)
+                    .background(
+                        homeGatewayColor(status).opacity(0.09),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(homeGatewayTitle(status, mode: mode))
+                        .font(.callout.weight(.semibold))
+                    Text(homeGatewayModeTitle(mode))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(text("打开检查", "Open check")) {
+                    selectPage(.inspection)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("home-gateway-open-check")
+            }
+        }
     }
 
     private var homeProtectionCard: some View {
@@ -1029,16 +1354,6 @@ struct Dashboard: View {
         }
     }
 
-    func setupStep(_ number: Int, _ title: String) -> some View {
-        HStack(spacing: 6) {
-            Text("\(number)")
-                .font(.caption2.weight(.semibold))
-                .frame(width: 18, height: 18)
-                .background(Color.primary.opacity(0.07), in: Circle())
-            Text(title).font(.caption.weight(.medium))
-        }
-    }
-
     var headline: String {
         store.policy.phase == .incident ? L("overview.incident") : store.monitoring ? L("overview.armed") : L("overview.unmonitored")
     }
@@ -1254,6 +1569,16 @@ struct Dashboard: View {
                     settingsSection = .cleanup
                 }
                 navigationToolCard(
+                    title: text("清空本地信息", "Clear local data"),
+                    subtitle: text("重置 Routekeeper 设置、报告、凭证和沙箱副本",
+                                   "Reset Routekeeper settings, reports, credentials and sandbox copies"),
+                    symbol: "externaldrive.badge.minus",
+                    identifier: "tool-card-local-data"
+                ) {
+                    localDataResetNotice = ""
+                    settingsSection = .localData
+                }
+                navigationToolCard(
                     title: text("关于", "About"),
                     subtitle: text("查看版本信息", "View version information"),
                     symbol: "info.circle",
@@ -1266,6 +1591,8 @@ struct Dashboard: View {
             eventsPage
         case .cleanup:
             cleanupPage
+        case .localData:
+            localDataPage
         case .disclaimer:
             DisclaimerPage(onQuit: { confirmQuit(store) })
         case .about:
@@ -1282,9 +1609,57 @@ struct Dashboard: View {
     }
 
     var advancedNetworkSummary: String {
-        store.networkFilter.configured
-            ? text("额外网络限制已开启", "Additional network restriction enabled")
-            : text("额外网络限制与连接排查，可选", "Additional restriction and connection check, optional")
+        let status = store.gatewayVerification.status(for: store.settings.gatewayProtectionMode)
+        if status == .verified {
+            return text("代理网关已验证", "Gateway verified")
+        }
+        if store.settings.gatewayProtectionMode != .off {
+            return text("已选择保护方式，等待网关检查", "Protection selected; gateway check pending")
+        }
+        return text("可选择分流保护或仅限制 Claude", "Choose split routing or Claude-only restriction")
+    }
+
+    private func homeGatewayTitle(
+        _ status: GatewayVerificationStatus,
+        mode: GatewayProtectionMode
+    ) -> String {
+        if mode == .off {
+            return text("未启用", "Off")
+        }
+        switch status {
+        case .unverified: return text("尚未验证", "Not verified")
+        case .needsNodeFailureTest: return text("待测节点断开", "Node-failure test pending")
+        case .needsClientExitTest: return text("待测代理退出", "Client-exit test pending")
+        case .needsRecovery: return text("待恢复代理并复测", "Restore proxy and finish")
+        case .verified: return text("当前网关已验证", "Current gateway verified")
+        case .failed: return text("验证未通过", "Verification failed")
+        case .expired: return text("证据已过期", "Evidence expired")
+        }
+    }
+
+    private func homeGatewaySymbol(_ status: GatewayVerificationStatus) -> String {
+        switch status {
+        case .verified: return "checkmark.shield.fill"
+        case .failed, .expired: return "exclamationmark.shield.fill"
+        case .needsNodeFailureTest, .needsClientExitTest, .needsRecovery: return "shield.lefthalf.filled"
+        case .unverified: return "shield"
+        }
+    }
+
+    private func homeGatewayColor(_ status: GatewayVerificationStatus) -> Color {
+        switch status {
+        case .verified: return appAccent
+        case .failed, .expired: return .orange
+        case .unverified, .needsNodeFailureTest, .needsClientExitTest, .needsRecovery: return .secondary
+        }
+    }
+
+    private func homeGatewayModeTitle(_ mode: GatewayProtectionMode) -> String {
+        switch mode {
+        case .off: return text("未选择保护方式", "No protection mode selected")
+        case .splitTraffic: return text("分流保护", "Split routing")
+        case .claudeOnly: return text("仅限制 Claude", "Claude only")
+        }
     }
 
     func navigationToolCard(
@@ -1438,6 +1813,146 @@ struct Dashboard: View {
                     }
                 }
             }.disabled(store.cleanupBusy)
+        }
+    }
+
+    var localDataPage: some View {
+        VStack(spacing: 16) {
+            GuardCard(
+                title: text("清空本地信息", "Clear local data"),
+                subtitle: text("把 Routekeeper 恢复成刚安装后的状态，不影响 Claude 和代理客户端。",
+                               "Return Routekeeper to a fresh-install state without changing Claude or your proxy client.")
+            ) {
+                localDataScopeRow(
+                    symbol: "gearshape",
+                    title: text("设置与检查记录", "Settings and check records"),
+                    detail: text("保护范围、固定出口、运行记录、出口报告、网关验证和抓包结果。",
+                                 "Protection scope, fixed exits, run log, egress reports, gateway evidence and capture results.")
+                )
+                localDataScopeRow(
+                    symbol: "key",
+                    title: text("登录凭证", "Sign-in credential"),
+                    detail: text("删除 Routekeeper 保存在 macOS 钥匙串里的 Claude Code 登录凭证。",
+                                 "Delete the Claude Code credential Routekeeper saved in your macOS Keychain.")
+                )
+                localDataScopeRow(
+                    symbol: "lock.shield",
+                    title: text("沙箱与系统过滤", "Sandbox and system filter"),
+                    detail: text("结束正在使用的沙箱，删除 Routekeeper 自己创建的会话副本，并关闭已启用的网络过滤。",
+                                 "End an active sandbox, delete session copies created by Routekeeper and turn off an enabled network filter.")
+                )
+
+                if store.checking || store.sandbox.busy || store.capture.busy
+                    || store.networkFilter.busy || store.gatewayVerification.busy || store.egressAudit.busy {
+                    Label(
+                        text("当前有操作正在运行。请等它结束再清空。",
+                             "An operation is still running. Wait for it to finish before clearing."),
+                        systemImage: "hourglass"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                }
+
+                HStack {
+                    Button(role: .destructive) {
+                        confirmClearLocalData = true
+                    } label: {
+                        Label(
+                            store.clearingLocalData
+                                ? text("正在清空…", "Clearing…")
+                                : text("清空本地信息…", "Clear local data…"),
+                            systemImage: "trash"
+                        )
+                    }
+                    .routekeeperProminentButton()
+                    .tint(.red)
+                    .disabled(
+                        store.clearingLocalData || store.checking || store.sandbox.busy
+                            || store.capture.busy || store.networkFilter.busy
+                            || store.gatewayVerification.busy || store.egressAudit.busy
+                    )
+                    .accessibilityIdentifier("local-data-clear")
+
+                    if store.clearingLocalData {
+                        ProgressView().controlSize(.small)
+                    }
+                    Spacer()
+                }
+
+                if !localDataResetNotice.isEmpty {
+                    Label(
+                        localDataResetNotice,
+                        systemImage: localDataResetNotice.contains(text("未能", "could not"))
+                            ? "exclamationmark.circle"
+                            : "checkmark.circle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(
+                        localDataResetNotice.contains(text("未能", "could not"))
+                            ? Color.orange
+                            : Color.green
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("local-data-result")
+                }
+            }
+
+            GuardCard(
+                title: text("不会删除", "Kept on this Mac"),
+                subtitle: text("以下内容仍归你或其他应用管理。",
+                               "These items remain managed by you or their own applications.")
+            ) {
+                Text(text(
+                    "Routekeeper 应用本体、你主动导出的报告文件、Claude 项目与对话、Claude 和代理客户端的设置、系统代理配置，以及钥匙串中的其他项目都不会被删除。",
+                    "The Routekeeper app, reports you exported, Claude projects and conversations, Claude and proxy-client settings, system proxy configuration, and other Keychain items are not deleted."
+                ))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .confirmationDialog(
+            text("清空 Routekeeper 的本地信息？", "Clear Routekeeper local data?"),
+            isPresented: $confirmClearLocalData
+        ) {
+            Button(text("清空本地信息", "Clear local data"), role: .destructive) {
+                clearLocalInformation()
+            }
+            Button(text("取消", "Cancel"), role: .cancel) {}
+        } message: {
+            Text(text(
+                "这会停止监控、结束沙箱、关闭已启用的网络过滤，并删除设置、检查记录、登录凭证和 Routekeeper 创建的沙箱副本。此操作无法撤销。",
+                "This stops monitoring, ends the sandbox, turns off an enabled network filter, and deletes settings, check records, the saved credential and sandbox copies created by Routekeeper. This cannot be undone."
+            ))
+        }
+    }
+
+    private func localDataScopeRow(symbol: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
+    }
+
+    private func clearLocalInformation() {
+        localDataResetNotice = ""
+        Task {
+            let cleared = await store.clearLocalInformation()
+            if cleared {
+                appearanceRaw = AppAppearance.system.rawValue
+            }
+            localDataResetNotice = store.notice
         }
     }
 
@@ -1677,6 +2192,65 @@ struct GlassButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }
+}
+
+private enum HomeSetupAction {
+    case inspection
+    case gatewayCheck
+    case startMonitoring
+
+    var title: String {
+        let en = L10n.resolvedEnglish
+        switch self {
+        case .inspection: return en ? "Open network check" : "打开网络体检"
+        case .gatewayCheck: return en ? "Finish gateway check" : "完成网关检查"
+        case .startMonitoring: return en ? "Start monitoring" : "开启监控"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .inspection: return "waveform.path.ecg.rectangle"
+        case .gatewayCheck: return "point.3.connected.trianglepath.dotted"
+        case .startMonitoring: return "shield.fill"
+        }
+    }
+
+    var color: Color {
+        self == .gatewayCheck ? .orange : appAccent
+    }
+}
+
+private enum HomeSetupStepState {
+    case complete
+    case current
+    case pending
+    case attention
+
+    var color: Color {
+        switch self {
+        case .complete: return appAccent
+        case .current: return .primary
+        case .pending: return .secondary
+        case .attention: return .orange
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .complete: return "checkmark"
+        case .current: return "arrow.right"
+        case .pending: return "circle"
+        case .attention: return "exclamationmark"
+        }
+    }
+}
+
+private struct HomeSetupStepItem: Identifiable {
+    let id: Int
+    let title: String
+    let detail: String
+    let state: HomeSetupStepState
 }
 
 struct GuardCard<Content: View>: View {

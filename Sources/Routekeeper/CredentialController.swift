@@ -82,21 +82,23 @@ final class CredentialController {
         message = "登录凭证已保存。下次启动时可以直接使用。"
     }
 
-    func delete() {
-        guard !busy else { return }
+    @discardableResult
+    func delete() -> Bool {
+        guard !busy else { return false }
         busy = true
         defer { busy = false }
         let result = SecItemDelete(baseQuery() as CFDictionary)
         guard result == errSecSuccess || result == errSecItemNotFound else {
             status = .error("删除失败（\(result)）")
             message = "Keychain 删除失败，请在系统钥匙串中检查。"
-            return
+            return false
         }
         tokenInput = ""
         savedAt = nil
         UserDefaults.standard.removeObject(forKey: "routekeeper.claude-token-saved-at")
         status = .missing
         message = "已删除 Claude Code 登录凭证。"
+        return true
     }
 
     func openTokenSetup() {

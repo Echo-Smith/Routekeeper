@@ -11,6 +11,7 @@ final class NetworkV2Tests: XCTestCase {
         XCTAssertEqual(value.pollInterval, 2); XCTAssertEqual(value.proxyClient, .automatic)
         XCTAssertTrue(value.dnsProbeEnabled); XCTAssertTrue(value.udpProbeEnabled)
         XCTAssertFalse(value.experimentalSandboxEnabled)
+        XCTAssertEqual(value.gatewayProtectionMode, .off)
         XCTAssertEqual(try JSONDecoder().decode(GuardSettings.self, from: JSONEncoder().encode(value)), value)
     }
     func testIntervalAndAddressFamilyTargets() {

@@ -6,6 +6,9 @@ public enum IncidentAction: String, Codable, CaseIterable, Sendable {
     case notify, terminate
     public var title: String { self == .notify ? "仅提醒" : "请求退出所选 Claude 进程" }
 }
+public enum GatewayProtectionMode: String, Codable, CaseIterable, Sendable {
+    case off, splitTraffic, claudeOnly
+}
 public struct GuardSettings: Codable, Equatable, Sendable {
     public var targetIP = ""
     public var alternateTargetIP = ""
@@ -19,11 +22,12 @@ public struct GuardSettings: Codable, Equatable, Sendable {
     public var cleanupConsented = false
     public var cleanupConsentedAt: Date?
     public var experimentalSandboxEnabled = false
+    public var gatewayProtectionMode: GatewayProtectionMode = .off
     public init() {}
     enum CodingKeys: String, CodingKey {
         case targetIP, alternateTargetIP, proxyClient, pollInterval, dnsProbeEnabled, udpProbeEnabled
         case protectDesktop, protectCode, action, cleanupConsented, cleanupConsentedAt
-        case experimentalSandboxEnabled
+        case experimentalSandboxEnabled, gatewayProtectionMode
     }
     public init(from decoder: Decoder) throws {
         self.init()
@@ -40,6 +44,7 @@ public struct GuardSettings: Codable, Equatable, Sendable {
         cleanupConsented = try c.decodeIfPresent(Bool.self, forKey: .cleanupConsented) ?? false
         cleanupConsentedAt = try c.decodeIfPresent(Date.self, forKey: .cleanupConsentedAt)
         experimentalSandboxEnabled = try c.decodeIfPresent(Bool.self, forKey: .experimentalSandboxEnabled) ?? false
+        gatewayProtectionMode = try c.decodeIfPresent(GatewayProtectionMode.self, forKey: .gatewayProtectionMode) ?? .off
     }
     public var validInterval: Bool { pollInterval.isFinite && (1...300).contains(pollInterval) }
     public var fixedIPv4TargetIP: String {

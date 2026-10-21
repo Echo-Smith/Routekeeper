@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import SystemConfiguration
 
 public enum IsolationPhase: String, Codable, Equatable, Sendable {
     case disabled
@@ -59,6 +60,104 @@ public struct IsolationUpstream: Codable, Equatable, Sendable {
             && (1...65535).contains(port)
             && !host.contains("/")
             && !host.contains("@")
+    }
+
+    public func matches(_ proxy: SystemProxyDescriptor?) -> Bool {
+        guard let proxy else { return false }
+        return IsolationUpstream.normalizedHost(host) == IsolationUpstream.normalizedHost(proxy.host)
+            && port == proxy.port
+            && protocolType == proxy.protocolType
+    }
+
+    public static func normalizedHost(_ value: String) -> String {
+        let host = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return host == "localhost" ? "127.0.0.1" : host
+    }
+}
+
+public struct SystemProxyDescriptor: Equatable, Sendable {
+    public var host: String
+    public var port: Int
+    public var protocolType: IsolationUpstreamProtocol
+
+    public init(host: String, port: Int, protocolType: IsolationUpstreamProtocol) {
+        self.host = host
+        self.port = port
+        self.protocolType = protocolType
+    }
+
+    public var isLoopback: Bool {
+        ["127.0.0.1", "::1", "localhost"].contains(host.lowercased())
+    }
+
+    public static func current() -> SystemProxyDescriptor? {
+        guard let values = SCDynamicStoreCopyProxies(nil) as? [String: Any] else { return nil }
+        return descriptor(from: values)
+    }
+
+    static func descriptor(from values: [String: Any]) -> SystemProxyDescriptor? {
+        let candidates: [(String, String, String, IsolationUpstreamProtocol)] = [
+            ("HTTPSEnable", "HTTPSProxy", "HTTPSPort", .httpConnect),
+            ("HTTPEnable", "HTTPProxy", "HTTPPort", .httpConnect),
+            ("SOCKSEnable", "SOCKSProxy", "SOCKSPort", .socks5)
+        ]
+        for (enabledKey, hostKey, portKey, protocolType) in candidates {
+            guard (values[enabledKey] as? NSNumber)?.boolValue == true,
+                  let host = values[hostKey] as? String,
+                  !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let port = values[portKey] as? NSNumber,
+                  (1...65535).contains(port.intValue) else { continue }
+            return .init(host: host, port: port.intValue, protocolType: protocolType)
+        }
+        return nil
+    }
+}
+
+public struct IsolationExpectedExits: Equatable, Sendable {
+    public var ipv4: String?
+    public var ipv6: String?
+
+    public init(ipv4: String? = nil, ipv6: String? = nil) {
+        self.ipv4 = ipv4.flatMap(IPAddress.normalized)
+        self.ipv6 = ipv6.flatMap(IPAddress.normalized)
+    }
+
+    public var hasAny: Bool { ipv4 != nil || ipv6 != nil }
+
+    public func contains(_ value: String) -> Bool {
+        guard let normalized = IPAddress.normalized(value) else { return false }
+        return normalized == ipv4 || normalized == ipv6
+    }
+}
+
+public enum IsolationSessionEnvironment {
+    public static func localeIdentifier(for timezoneIdentifier: String) -> String {
+        switch timezoneIdentifier {
+        case "Asia/Shanghai", "Asia/Chongqing", "Asia/Harbin":
+            return "zh_CN.UTF-8"
+        case "Asia/Hong_Kong":
+            return "zh_HK.UTF-8"
+        case "Asia/Taipei":
+            return "zh_TW.UTF-8"
+        case "Asia/Tokyo":
+            return "ja_JP.UTF-8"
+        case "Asia/Seoul":
+            return "ko_KR.UTF-8"
+        case "Europe/London":
+            return "en_GB.UTF-8"
+        case "Europe/Paris":
+            return "fr_FR.UTF-8"
+        case "Europe/Berlin":
+            return "de_DE.UTF-8"
+        case "Australia/Sydney":
+            return "en_AU.UTF-8"
+        default:
+            return "en_US.UTF-8"
+        }
+    }
+
+    public static func languageIdentifier(forLocale locale: String) -> String {
+        String(locale.split(separator: "_").first ?? "en")
     }
 }
 

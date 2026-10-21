@@ -72,4 +72,11 @@ final class CaptureController {
         do { try report.write(to: url, atomically: true, encoding: .utf8); message = "抓包记录已导出，包含网络地址，请按需分享" }
         catch { message = "导出失败：\(error.localizedDescription)" }
     }
+
+    func reset() {
+        destination = "1.1.1.1"
+        seconds = 15
+        report = ""
+        refreshRoute()
+    }
 }

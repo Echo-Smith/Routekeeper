@@ -17,6 +17,50 @@ struct NetworkProtectionPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             GuardCard(
+                title: text("选择保护方式", "Choose a protection mode"),
+                subtitle: text(
+                    "这里只记录你要采用的配置方式，实际规则仍由代理客户端执行。选择后必须完成节点断开和代理退出测试。",
+                    "This records the configuration you intend to use. The proxy client still applies the rules. Complete the node-failure and client-exit tests before Routekeeper treats it as verified."
+                )
+            ) {
+                Picker("", selection: $store.settings.gatewayProtectionMode) {
+                    ForEach(GatewayProtectionMode.allCases, id: \.self) { mode in
+                        Text(modeTitle(mode)).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 430)
+
+                Text(modeExplanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if store.settings.gatewayProtectionMode != .off {
+                    HStack {
+                        Label(
+                            gatewayStatusText,
+                            systemImage: store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) == .verified
+                                ? "checkmark.shield.fill"
+                                : "shield.lefthalf.filled"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(
+                            store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) == .verified
+                                ? appAccent
+                                : Color.secondary
+                        )
+                        Spacer()
+                        Button(text("去网络体检", "Open network check")) {
+                            AppNavigationRequest.request(.inspection)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            GuardCard(
                 title: text("让 Claude 只能走代理", "Keep Claude on the proxy"),
                 subtitle: text("可选。由代理客户端限制 Claude；节点不可用时断开连接，不回落直连。",
                                "Optional. Let the proxy client keep Claude on the selected route and fail closed when the node is unavailable.")
@@ -250,6 +294,46 @@ struct NetworkProtectionPage: View {
 
     private var restrictionPrompt: String {
         RoutingProtection.restrictionPrompt(clientName: routingClientName)
+    }
+
+    private func modeTitle(_ mode: GatewayProtectionMode) -> String {
+        switch mode {
+        case .off: return text("关闭", "Off")
+        case .splitTraffic: return text("分流保护", "Split routing")
+        case .claudeOnly: return text("仅限制 Claude", "Claude only")
+        }
+    }
+
+    private var modeExplanation: String {
+        switch store.settings.gatewayProtectionMode {
+        case .off:
+            return text(
+                "仍可复制提示词，但不会把代理规则当作已启用保护。",
+                "You can still copy the prompts, but proxy rules are not treated as an active protection mode."
+            )
+        case .splitTraffic:
+            return text(
+                "适合让整台 Mac 使用 TUN：国内直连，其余流量走所选海外节点，节点不可用时失败关闭。",
+                "Intended for Mac-wide TUN routing: domestic traffic goes direct, everything else uses the selected overseas node, and node failure fails closed."
+            )
+        case .claudeOnly:
+            return text(
+                "只尝试按 Claude Desktop 与 Claude Code 进程限制网络。Routekeeper 只能验证系统路径，不能替你证明代理客户端正确识别了每个 Claude 子进程。",
+                "Tries to restrict only Claude Desktop and Claude Code processes. Routekeeper can verify the system path, but cannot prove that the proxy client identified every Claude child process."
+            )
+        }
+    }
+
+    private var gatewayStatusText: String {
+        switch store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) {
+        case .unverified: return text("尚未进行代理网关检查", "Gateway not checked")
+        case .needsNodeFailureTest: return text("待测节点断开", "Node-failure test pending")
+        case .needsClientExitTest: return text("待测代理退出", "Client-exit test pending")
+        case .needsRecovery: return text("待恢复代理并复测", "Restore proxy and finish")
+        case .verified: return text("当前网络会话已验证", "Verified for this network session")
+        case .failed: return text("验证未通过", "Verification failed")
+        case .expired: return text("证据已过期", "Evidence expired")
+        }
     }
 
     private func copyRestrictionPrompt() {

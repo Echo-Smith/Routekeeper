@@ -17,6 +17,11 @@ final class GuardStore {
         didSet {
             guard settings != oldValue else { return }
             if monitoring { stop() }
+            gatewayVerification.invalidate(
+                reason: L10n.resolvedEnglish
+                    ? "Protection settings changed after gateway verification."
+                    : "保护设置已更改，之前的代理网关检查需要重做。"
+            )
             epoch += 1
             snapshot = nil
             notice = L("notice.settingsChanged")
@@ -51,9 +56,11 @@ final class GuardStore {
     var capture = CaptureController()
     var authentication = CredentialController()
     var sandbox: SandboxSession
-    var egressAudit = EgressAuditController()
+    var gatewayVerification: GatewayVerificationController
+    var egressAudit: EgressAuditController
     var events: [GuardEvent] = []
     var notice = ""
+    var clearingLocalData = false
     var cleanupPlan: CleanupPlan?
     var cleanupBusy = false
     var cleanupSelection: Set<String> = []
@@ -77,14 +84,25 @@ final class GuardStore {
     @ObservationIgnored private let diagnostics: DiagnosticRunner
     @ObservationIgnored private let notificationsEnabled: Bool
     @ObservationIgnored private var systemSleeping = false
+    @ObservationIgnored private let credentialClearer: (() -> Bool)?
+    @ObservationIgnored private let networkFilterDisabler: (() async -> Error?)?
 
     private static let egressAutomationKey = "routekeeper-egress-auto-v1"
     private static let egressIntervalKey = "routekeeper-egress-auto-interval-v1"
 
     init(defaults: UserDefaults = .standard, watchNetwork: Bool = true, notificationsEnabled: Bool = true,
+         gatewayVerification: GatewayVerificationController? = nil,
+         egressAuditController: EgressAuditController? = nil,
+         sandbox: SandboxSession? = nil,
+         credentialClearer: (() -> Bool)? = nil,
+         networkFilterDisabler: (() async -> Error?)? = nil,
          runDiagnostic: @escaping @Sendable (GuardSettings) async -> DiagnosticSnapshot = { await Diagnostics.run(settings: $0) }) {
         preferences = defaults
-        sandbox = SandboxSession(preferences: defaults)
+        self.gatewayVerification = gatewayVerification ?? GatewayVerificationController(defaults: defaults)
+        self.egressAudit = egressAuditController ?? EgressAuditController(defaults: defaults)
+        self.sandbox = sandbox ?? SandboxSession(preferences: defaults)
+        self.credentialClearer = credentialClearer
+        self.networkFilterDisabler = networkFilterDisabler
         self.notificationsEnabled = notificationsEnabled
         automaticEgressAuditEnabled = defaults.object(forKey: Self.egressAutomationKey) as? Bool ?? true
         automaticEgressAuditIntervalMinutes = Self.normalizedEgressInterval(
@@ -102,10 +120,33 @@ final class GuardStore {
         if settings.experimentalSandboxEnabled {
             return sandbox.statusTitle
         }
+        if policy.phase == .idle, settings.gatewayProtectionMode != .off {
+            switch gatewayVerification.status(for: settings.gatewayProtectionMode) {
+            case .verified:
+                break
+            case .needsNodeFailureTest:
+                return L10n.resolvedEnglish ? "Gateway node test pending" : "代理网关待测节点断开"
+            case .needsClientExitTest:
+                return L10n.resolvedEnglish ? "Gateway client test pending" : "代理网关待测客户端退出"
+            case .needsRecovery:
+                return L10n.resolvedEnglish ? "Restore proxy and finish" : "代理网关待恢复复测"
+            case .failed:
+                return L10n.resolvedEnglish ? "Gateway check failed" : "代理网关检查未通过"
+            case .expired:
+                return L10n.resolvedEnglish ? "Gateway evidence expired" : "代理网关证据已过期"
+            case .unverified:
+                return L10n.resolvedEnglish ? "Gateway check pending" : "代理网关待检查"
+            }
+        }
         return L10n.t("status.\(policy.phase == .idle ? (checking ? "checking" : "idle") : policy.phase == .armed ? "armed" : "incident")")
     }
     var symbol: String {
         if settings.experimentalSandboxEnabled { return sandbox.statusSymbol }
+        if policy.phase == .idle,
+           settings.gatewayProtectionMode != .off,
+           gatewayVerification.status(for: settings.gatewayProtectionMode) != .verified {
+            return "shield.lefthalf.filled"
+        }
         return policy.phase == .incident ? "exclamationmark.shield.fill" : policy.phase == .armed ? "shield.lefthalf.filled" : "shield"
     }
 
@@ -269,6 +310,14 @@ final class GuardStore {
             }
             return
         }
+        guard settings.gatewayProtectionMode == .off
+                || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) else {
+            notice = L10n.resolvedEnglish
+                ? "Complete the current gateway checks before starting monitoring while gateway protection is selected."
+                : "已选择代理网关保护，请先在“网络体检 → 代理网关”完成当前网络下的检查。"
+            log(notice, attention: true)
+            return
+        }
         checking = true; epoch += 1
         let requestEpoch = epoch; let selected = settings
         let result = await diagnostics.run(selected)
@@ -309,6 +358,11 @@ final class GuardStore {
         }
     }
     func environmentChanged(_ reason: String, sleeping: Bool, waking: Bool = false) {
+        gatewayVerification.invalidate(
+            reason: L10n.resolvedEnglish
+                ? "Network state changed; previous gateway evidence was invalidated."
+                : "网络状态已变化，之前的代理网关证据已作废。"
+        )
         if sandboxModeActive {
             if sleeping { systemSleeping = true }
             if waking { systemSleeping = false }
@@ -397,7 +451,14 @@ final class GuardStore {
     func launchDesktop() {
         guard monitoring, policy.phase == .armed, let latest = snapshot,
               Date().timeIntervalSince(latest.checkedAt) < 15, latest.ready,
-              settings.protectDesktop, let path = latest.desktopPath else { notice = L10n.resolvedEnglish ? "Pass self-check and enable desktop monitoring first." : "请先通过检查并开启桌面版监控。"; return }
+              settings.protectDesktop, let path = latest.desktopPath,
+              settings.gatewayProtectionMode == .off
+                || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) else {
+            notice = L10n.resolvedEnglish
+                ? "Pass the current gateway and self-check evidence before launching."
+                : "请先完成当前网络下的代理网关和自检，再启动桌面版。"
+            return
+        }
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: path), configuration: .init()) { _, error in
             if let error { Task { @MainActor in self.notice = "\(L10n.resolvedEnglish ? "Launch failed: " : "启动失败：")\(error.localizedDescription)" } }
         }
@@ -410,8 +471,25 @@ final class GuardStore {
                 : "请先开启“实验性进程沙箱”模式。"
             return
         }
+        let expectedExits = IsolationExpectedExits(
+            ipv4: settings.target(for: .ipv4),
+            ipv6: settings.target(for: .ipv6)
+        )
+        guard expectedExits.hasAny else {
+            notice = L10n.resolvedEnglish
+                ? "Save an IPv4 or IPv6 exit in the ordinary network check before creating a sandbox session."
+                : "请先完成普通网络体检并保存 IPv4 或 IPv6 出口，再创建沙箱会话。保存值用于核对沙箱内 Claude 的实际出口。"
+            return
+        }
+        if settings.gatewayProtectionMode != .off
+            && !gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) {
+            notice = L10n.resolvedEnglish
+                ? "Finish the current gateway checks before creating a sandbox session."
+                : "已选择代理网关保护，请先在“网络体检 → 代理网关”完成当前网络下的检查。"
+            return
+        }
         if monitoring { stop() }
-        await sandbox.prepare()
+        await sandbox.prepare(expectedExits: expectedExits)
         log(sandbox.statusTitle, attention: sandbox.phase == .failed)
     }
 
@@ -464,6 +542,103 @@ final class GuardStore {
         if sandbox.phase.isActive {
             await sandbox.endSession()
         }
+    }
+
+    @discardableResult
+    func clearLocalInformation() async -> Bool {
+        guard !clearingLocalData else { return false }
+        guard !checking, !capture.busy, !sandbox.busy, !networkFilter.busy,
+              !gatewayVerification.busy, !egressAudit.busy else {
+            notice = L10n.resolvedEnglish
+                ? "A check, sandbox, capture or network-filter operation is still running. Wait for it to finish, then try again."
+                : "当前仍有检查、沙箱、抓包或网络过滤操作在运行。请等待完成后再清空。"
+            return false
+        }
+
+        clearingLocalData = true
+        defer { clearingLocalData = false }
+
+        stop()
+        egressAutomationTask?.cancel()
+        egressEventTask?.cancel()
+        egressAutomationTask = nil
+        egressEventTask = nil
+
+        let filterError: Error?
+        if let networkFilterDisabler {
+            filterError = await networkFilterDisabler()
+        } else {
+            filterError = await networkFilter.disableAndWait()
+        }
+        if let error = filterError {
+            notice = L10n.resolvedEnglish
+                ? "The system network filter could not be turned off, so local information was kept: \(error.localizedDescription)"
+                : "系统网络过滤未能关闭，为避免留下仍在生效的旧配置，本次没有清空本地信息：\(error.localizedDescription)"
+            return false
+        }
+
+        let sandboxCleared = await sandbox.clearForLocalDataReset()
+        guard sandboxCleared else {
+            notice = L10n.resolvedEnglish
+                ? "The sandbox is still busy. Wait for it to finish, then try again."
+                : "沙箱仍在处理其他操作。请等待完成后再清空。"
+            return false
+        }
+
+        let credentialCleared = credentialClearer?() ?? authentication.delete()
+        gatewayVerification.clear()
+        egressAudit.clearHistory()
+        egressAudit.clearStoredResults()
+        capture.reset()
+
+        settings = GuardSettings()
+        automaticEgressAuditEnabled = true
+        automaticEgressAuditIntervalMinutes = 30
+        policy = GuardPolicy()
+        snapshot = nil
+        activeFamilies = nil
+        monitoring = false
+        checking = false
+        lastSignal = [:]
+        events = []
+        cleanupPlan = nil
+        cleanupBusy = false
+        cleanupSelection = []
+        cleanupResult = ""
+        egressAutomationTask?.cancel()
+        egressEventTask?.cancel()
+        egressAutomationTask = nil
+        egressEventTask = nil
+
+        let fixedKeys: Set<String> = [
+            "guard-settings-v1",
+            "routekeeper-egress-auto-v1",
+            "routekeeper-egress-auto-interval-v1",
+            L10n.languageKey,
+            L10n.appearanceKey,
+            "AppleLanguages"
+        ]
+        let preservedKeys: Set<String> = [
+            "routekeeper.disclaimer-accepted-version"
+        ]
+        let dynamicKeys = Set(preferences.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix("routekeeper") && !preservedKeys.contains($0)
+        })
+        for key in fixedKeys.union(dynamicKeys) {
+            preferences.removeObject(forKey: key)
+        }
+
+        languageRevision += 1
+        if credentialCleared {
+            notice = L10n.resolvedEnglish
+                ? "Local settings, reports, saved credentials, sandbox copies and run history were cleared."
+                : "已清空本地设置、报告、登录凭证、沙箱副本和运行记录。"
+            return true
+        }
+        notice = L10n.resolvedEnglish
+            ? "Local settings and files were cleared, but the Keychain credential could not be removed. Check Keychain Access."
+            : "本地设置与文件已清空，但 Keychain 登录凭证未能删除。请检查“钥匙串访问”。"
+        return false
     }
     func exportReport(redacted: Bool = false) {
         guard let snapshot else { return }

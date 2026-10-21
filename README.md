@@ -7,7 +7,7 @@ checks whether observed IPv4 and IPv6 traffic follows the expected route,
 helps compare expected and observed proxy exits, and can monitor selected
 applications for network changes.
 
-Version **0.3.11** (build 20) is a private development preview for macOS 14 or
+Version **0.3.12** (build 22) is a private development preview for macOS 14 or
 later. The app is ad-hoc signed and the local DMG is not notarized.
 
 ## Features
@@ -20,6 +20,11 @@ later. The app is ad-hoc signed and the local DMG is not notarized.
   application.
 - Sleep, wake, path, DNS, proxy, and address-change invalidation. Unknown
   evidence never counts as a pass.
+- A staged proxy-gateway check for the current path, overseas-node failure,
+  proxy-client exit, and restored connectivity. Evidence expires after network,
+  proxy or settings changes, sleep/wake, a Routekeeper restart, or 15 minutes.
+  Selected gateway protection blocks monitoring and desktop launch until fresh
+  evidence passes.
 - Optional selected-process network filtering source using a Network
   Extension. The current ad-hoc build cannot activate the required system
   extension entitlement.
@@ -28,7 +33,9 @@ later. The app is ad-hoc signed and the local DMG is not notarized.
 - An optional experimental process sandbox for Claude Code. It runs a reviewed
   project copy with an isolated HOME, a selected session timezone, local
   HTTP CONNECT or SOCKS5 proxy upstreams, and process-level fail-closed
-  networking. The original project is never changed automatically.
+  networking. A detectable system proxy is aligned automatically, and Claude
+  reachability is compared with the saved exit. The original project is never
+  changed automatically.
 - An optional long-lived CLI credential helper that stores its value in the
   user's Keychain.
 - Redacted diagnostic export and local monitoring history.
@@ -41,8 +48,12 @@ verification documents before relying on a check.
 The process sandbox is experimental. It relies on dynamically generated macOS
 `sandbox-exec` profiles, which Apple marks as deprecated and may change. A
 preflight failure keeps Claude Code from launching with unrestricted access.
-The sandbox is process and file isolation, not a full virtual machine, and it
-does not guarantee account, device-fingerprint, or server-side risk outcomes.
+Sandboxed processes cannot listen on localhost project ports or launch the
+default browser automatically; preview work after ending the session instead.
+The sandbox keeps session timezone, language and locale consistent, but it is
+process and file isolation, not a full virtual machine. It cannot spoof the
+hardware sales region and does not guarantee account, device-fingerprint, or
+server-side risk outcomes.
 
 ## Requirements
 
@@ -65,10 +76,12 @@ bash scripts/build-dmg.sh
 `build-dmg.sh` creates a draggable-to-Applications DMG for local distribution.
 Build output and signing profiles are excluded from Git.
 
-The test suite currently contains 88 tests covering route evidence, IPv6,
+The test suite currently contains 98 tests covering route evidence, IPv6,
 DNS/UDP probes, report redaction, monitoring state, process scope, capture
 validation, presentation behavior, local relay protocols, Seatbelt file and
-network enforcement, child-process inheritance, and sandbox status handling.
+network enforcement, system-proxy alignment, localhost-listener blocking,
+child-process inheritance, sandbox status handling, local-data reset boundaries,
+and proxy-gateway evidence freshness and launch gating.
 
 ## Read-only CLI
 
@@ -89,9 +102,16 @@ distribution still requires Developer ID signing, notarization, and validation
 on the target macOS versions. Provisioning profiles and private signing
 material are intentionally not committed.
 
+Apple Development and App Store signing use the `content-filter-provider`
+Network Extension entitlement. Direct distribution signed with a Developer ID
+Application certificate uses `content-filter-provider-systemextension`. The
+signed build script selects the value allowed by the supplied provisioning
+profiles.
+
 ## Documentation
 
 - [Isolated runner plan](docs/plans/2026-10-21-isolated-runner.md)
+- [Proxy gateway verification plan](docs/plans/2026-10-21-proxy-gateway-verification.md)
 - [Design notes](docs/design.md)
 - [Network verification](docs/network-v2-verification.md)
 - [Handoff notes](HANDOFF.md)

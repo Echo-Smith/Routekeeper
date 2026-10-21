@@ -8,17 +8,25 @@ final class PresentationTests: XCTestCase {
         let app = NSApplication.shared
         let originalPolicy = app.activationPolicy()
         let delegate = RoutekeeperAppDelegate()
+        let suite = "guard-menu-bar-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
                               styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered, defer: false)
         defer {
             window.orderOut(nil)
             app.setActivationPolicy(originalPolicy)
+            delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+            defaults.removePersistentDomain(forName: suite)
             _ = AppNavigationRequest.consumePendingPage()
         }
+        delegate.configureStatusItem(store: store)
+        XCTAssertTrue(delegate.isStatusItemConfigured)
         delegate.attach(window, openWindow: { XCTFail("Existing panel should be reused") })
         window.close()
         XCTAssertEqual(app.activationPolicy(), .accessory)
+        XCTAssertTrue(delegate.isStatusItemConfigured)
         XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(app))
         delegate.showChecksPanel()
         try? await Task.sleep(for: .milliseconds(250))
@@ -124,6 +132,70 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(persisted.upstream.password, "")
         let restored = SandboxSession(preferences: defaults)
         XCTAssertEqual(restored.configuration.upstream.password, "")
+    }
+
+    @MainActor func testClearLocalInformationRemovesOwnedDataAndSandboxCopies() async throws {
+        let suite = "guard-local-data-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-local-data-\(UUID())", isDirectory: true)
+        let sessionsRoot = temp.appendingPathComponent("Isolation", isDirectory: true)
+        let ownedSession = sessionsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let unownedDirectory = sessionsRoot.appendingPathComponent("keep-me", isDirectory: true)
+        var credentialCleared = false
+
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: temp)
+        }
+        try FileManager.default.createDirectory(at: ownedSession, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unownedDirectory, withIntermediateDirectories: true)
+        try Data("owned\n".utf8).write(to: ownedSession.appendingPathComponent(".routekeeper-session"))
+
+        let gateway = GatewayVerificationController(defaults: defaults, invalidateLoadedEvidence: false)
+        let egress = EgressAuditController(defaults: defaults)
+        let sandbox = SandboxSession(preferences: defaults, sessionsRoot: sessionsRoot)
+        let store = GuardStore(
+            defaults: defaults,
+            watchNetwork: false,
+            notificationsEnabled: false,
+            gatewayVerification: gateway,
+            egressAuditController: egress,
+            sandbox: sandbox,
+            credentialClearer: {
+                credentialCleared = true
+                return true
+            },
+            networkFilterDisabler: { nil }
+        )
+        store.settings.targetIP = "1.2.3.4"
+        store.events = [GuardEvent(message: "private test event")]
+        store.snapshot = DiagnosticSnapshot(
+            settings: store.settings,
+            checks: [],
+            proxyIP: "1.2.3.4",
+            tunnelIP: "1.2.3.4",
+            processes: [],
+            desktopPath: nil,
+            codePaths: []
+        )
+        defaults.set(Data("secret".utf8), forKey: "routekeeper-test-private-value")
+        defaults.set("2026-10-21.2", forKey: "routekeeper.disclaimer-accepted-version")
+        defaults.set("zh-Hans", forKey: L10n.languageKey)
+
+        let cleared = await store.clearLocalInformation()
+
+        XCTAssertTrue(cleared)
+        XCTAssertTrue(credentialCleared)
+        XCTAssertEqual(store.settings, GuardSettings())
+        XCTAssertNil(store.snapshot)
+        XCTAssertTrue(store.events.isEmpty)
+        XCTAssertNil(defaults.object(forKey: "guard-settings-v1"))
+        XCTAssertNil(defaults.object(forKey: "routekeeper-test-private-value"))
+        XCTAssertNil(defaults.object(forKey: L10n.languageKey))
+        XCTAssertEqual(defaults.string(forKey: "routekeeper.disclaimer-accepted-version"), "2026-10-21.2")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedSession.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unownedDirectory.path))
     }
 
     func testSandboxEnvironmentCarriesCanonicalIsolationPaths() {
