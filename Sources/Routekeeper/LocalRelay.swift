@@ -42,6 +42,11 @@ final class LocalRelay: @unchecked Sendable {
     private var clientUsername = ""
     private var clientPassword = ""
     private var authHeader = ""
+    private let handshakeTimeoutSeconds: Int
+
+    init(handshakeTimeoutSeconds: Int = 20) {
+        self.handshakeTimeoutSeconds = max(1, handshakeTimeoutSeconds)
+    }
 
     deinit { stop() }
 
@@ -115,6 +120,13 @@ final class LocalRelay: @unchecked Sendable {
         }
     }
 
+    func socks5URL() -> String? {
+        lock.withLock {
+            guard let boundPort else { return nil }
+            return "socks5://127.0.0.1:\(boundPort)"
+        }
+    }
+
     private func makeListener(preferredPort: Int?) throws -> Int32 {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw LocalRelayError.socket(String(cString: strerror(errno))) }
@@ -160,7 +172,7 @@ final class LocalRelay: @unchecked Sendable {
                 if errno == EINTR { continue }
                 break
             }
-            setSocketTimeout(client, seconds: 20)
+            setSocketTimeout(client, seconds: handshakeTimeoutSeconds)
             register(client)
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 self?.handle(client)
@@ -204,6 +216,8 @@ final class LocalRelay: @unchecked Sendable {
                 try sendAll(client, Data("HTTP/1.1 200 Connection Established\r\n\r\n".utf8))
             }
             stage = "转发数据"
+            clearReceiveTimeout(client)
+            clearReceiveTimeout(upstreamSocket)
             relay(client, upstreamSocket)
         } catch {
             lock.withLock { lastError = "\(stage)：\(error.localizedDescription)" }
@@ -249,17 +263,23 @@ final class LocalRelay: @unchecked Sendable {
         if methodCount > 1 {
             methods.append(try receiveExactly(client, count: methodCount - 1))
         }
-        guard methods.contains(0x02) else { throw LocalRelayError.authenticationFailed }
-        _ = try sendAll(client, Data([0x05, 0x02]))
-        let authVersion = try receiveExactly(client, count: 1)[0]
-        let usernameLength = Int(try receiveExactly(client, count: 1)[0])
-        let username = String(decoding: try receiveExactly(client, count: usernameLength), as: UTF8.self)
-        let passwordLength = Int(try receiveExactly(client, count: 1)[0])
-        let password = String(decoding: try receiveExactly(client, count: passwordLength), as: UTF8.self)
-        guard authVersion == 0x01, username == clientUsername, password == clientPassword else {
+        if methods.contains(0x02) {
+            _ = try sendAll(client, Data([0x05, 0x02]))
+            let authVersion = try receiveExactly(client, count: 1)[0]
+            let usernameLength = Int(try receiveExactly(client, count: 1)[0])
+            let username = String(decoding: try receiveExactly(client, count: usernameLength), as: UTF8.self)
+            let passwordLength = Int(try receiveExactly(client, count: 1)[0])
+            let password = String(decoding: try receiveExactly(client, count: passwordLength), as: UTF8.self)
+            guard authVersion == 0x01, username == clientUsername, password == clientPassword else {
+                throw LocalRelayError.authenticationFailed
+            }
+            _ = try sendAll(client, Data([0x01, 0x00]))
+        } else if methods.contains(0x00) {
+            // Chromium command-line proxies support SOCKS5 without an auth callback.
+            _ = try sendAll(client, Data([0x05, 0x00]))
+        } else {
             throw LocalRelayError.authenticationFailed
         }
-        _ = try sendAll(client, Data([0x01, 0x00]))
 
         let request = try receiveExactly(client, count: 4)
         guard request[0] == 0x05, request[1] == 0x01 else { throw LocalRelayError.invalidClient }
@@ -487,6 +507,11 @@ final class LocalRelay: @unchecked Sendable {
         var timeout = timeval(tv_sec: seconds, tv_usec: 0)
         setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    private func clearReceiveTimeout(_ descriptor: Int32) {
+        var timeout = timeval(tv_sec: 0, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 }
 

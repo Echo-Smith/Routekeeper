@@ -33,6 +33,10 @@ extension View {
         modifier(RoutekeeperProminentButtonModifier())
     }
 
+    func routekeeperSecondaryButton() -> some View {
+        modifier(RoutekeeperSecondaryButtonModifier())
+    }
+
     func routekeeperGlassCapsule() -> some View {
         modifier(RoutekeeperCapsuleModifier())
     }
@@ -45,11 +49,25 @@ extension View {
 private struct RoutekeeperProminentButtonModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
+        let styledContent = content
+            .font(.system(size: 14, weight: .semibold))
+            .controlSize(.large)
+            .buttonBorderShape(.roundedRectangle(radius: 10))
         if #available(macOS 26.0, *) {
-            content.buttonStyle(.glassProminent)
+            styledContent.buttonStyle(.glassProminent)
         } else {
-            content.buttonStyle(.borderedProminent)
+            styledContent.buttonStyle(.borderedProminent)
         }
+    }
+}
+
+private struct RoutekeeperSecondaryButtonModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 13.5, weight: .medium))
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.roundedRectangle(radius: 9))
     }
 }
 

@@ -9,6 +9,7 @@ struct EgressAuditPage: View {
     @Bindable var store: GuardStore
     @Bindable var audit: EgressAuditController
     var embedded = false
+    var compact = false
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
     @State private var confirmClearHistory = false
     @State private var confirmClearReports = false
@@ -20,24 +21,47 @@ struct EgressAuditPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if !embedded {
-                actionCard
-            }
-            if let report = audit.report {
-                summaryCard(report)
-                comparisonCard
-                if embedded {
-                    reportActionsCard(report)
-                    advancedOptionsCard
-                }
-                detailsToggle
-                if showDetails {
+            if compact {
+                if let report = audit.report {
                     detailSections(report)
+                } else {
+                    GuardCard(
+                        title: text("尚无出口体检结果", "No egress check yet"),
+                        subtitle: text(
+                            "完整证据会在运行体检后显示。检查参数与隐私选项在“保护 > 网络保护”中管理。",
+                            "Full evidence appears after a check. Check parameters and privacy options are managed in Protection > Network protection."
+                        )
+                    ) {
+                        Text(text("运行上方“完整体检”后，这里会显示出口、服务、IPv6 与历史证据。",
+                                  "Run the full check above to populate exit, service, IPv6 and history evidence here."))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                feedbackMessages
             } else {
-                emptyCard
-                if embedded {
-                    advancedOptionsCard
+                if !embedded {
+                    actionCard
+                }
+                if let report = audit.report {
+                    summaryCard(report)
+                    comparisonCard
+                    if embedded {
+                        reportActionsCard(report)
+                        advancedOptionsCard
+                    }
+                    detailsToggle
+                    if showDetails {
+                        detailSections(report)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .clipped()
+                            .transition(.opacity)
+                    }
+                } else {
+                    emptyCard
+                    if embedded {
+                        advancedOptionsCard
+                    }
                 }
             }
         }
@@ -72,7 +96,7 @@ struct EgressAuditPage: View {
                     Label(text("导出脱敏报告", "Export redacted report"),
                           systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
                 .accessibilityIdentifier("egress-export-redacted")
 
                 Button(role: .destructive) {
@@ -81,7 +105,7 @@ struct EgressAuditPage: View {
                     Label(text("清除已保存报告", "Clear stored reports"),
                           systemImage: "trash")
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
                 .accessibilityIdentifier("egress-clear-reports")
 
                 Spacer(minLength: 0)
@@ -238,7 +262,7 @@ struct EgressAuditPage: View {
                         Label(text("导出脱敏报告…", "Export redacted report…"),
                               systemImage: "square.and.arrow.up")
                     }
-                    .buttonStyle(.bordered)
+                    .routekeeperSecondaryButton()
                     .accessibilityIdentifier("egress-export-redacted")
                 }
                 Spacer()
@@ -321,7 +345,7 @@ struct EgressAuditPage: View {
             if !report.assessment.findings.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(report.assessment.findings, id: \.self) { finding in
-                        Label(findingText(finding), systemImage: finding == .thirdPartyDisabled ? "info.circle" : "exclamationmark.circle")
+                        Label(finding.localizedDescription, systemImage: finding == .thirdPartyDisabled ? "info.circle" : "exclamationmark.circle")
                             .font(.callout)
                             .foregroundStyle(finding == .thirdPartyDisabled ? Color.secondary : Color.orange)
                     }
@@ -406,12 +430,12 @@ struct EgressAuditPage: View {
                             )
                         }
                         ForEach(comparison.addedFindings, id: \.self) { finding in
-                            Label(text("新增：", "New: ") + findingText(finding),
+                            Label(text("新增：", "New: ") + finding.localizedDescription,
                                   systemImage: "exclamationmark.circle.fill")
                                 .font(.caption).foregroundStyle(.orange)
                         }
                         ForEach(comparison.resolvedFindings, id: \.self) { finding in
-                            Label(text("已消失：", "Resolved: ") + findingText(finding),
+                            Label(text("已消失：", "Resolved: ") + finding.localizedDescription,
                                   systemImage: "checkmark.circle.fill")
                                 .font(.caption).foregroundStyle(egressAccent)
                         }
@@ -750,7 +774,9 @@ struct EgressAuditPage: View {
                               "Exit history stays on this Mac and is not uploaded automatically. It contains sensitive IP data."))
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button(text("清除历史", "Clear history"), role: .destructive) { confirmClearHistory = true }
+                    Text(text("可在“保护 > 网络保护”中清除", "Clear it in Protection > Network protection"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
                 if audit.history.count >= 2 {
                     historyChart
@@ -1105,83 +1131,6 @@ struct EgressAuditPage: View {
         }
     }
 
-    private func findingText(_ finding: EgressFinding) -> String {
-        switch finding {
-        case .exitMismatch:
-            return text("同一地址族的系统出口与代理出口不同，或与固定目标不一致。",
-                        "System and proxy exits differ, or an exit does not match the fixed target.")
-        case .incompleteExitEvidence:
-            return text("只有一个路径取得出口，无法证明两路一致。",
-                        "Only one path produced an exit; consistency cannot be proven.")
-        case .noObservedExit:
-            return text("本次没有观察到公网出口。", "No public exit was observed.")
-        case .serviceUnreachable:
-            return text("至少一个 Claude 服务未完成 TLS 连接。",
-                        "At least one Claude service did not establish TLS.")
-        case .countryMismatch:
-            return text("不同出口 IP 的国家/地区情报不一致。",
-                        "Countries or regions differ across observed exit IPs.")
-        case .asnMismatch:
-            return text("不同出口 IP 的 ASN 不一致，可能经过不同网络。",
-                        "Observed exit IPs use different ASNs and may traverse different networks.")
-        case .datacenterNetwork:
-            return text("情报将主出口标记为数据中心/机房网络。这可能触发额外验证，但不是封号结论。",
-                        "The primary exit is flagged as datacenter/hosting. This may trigger extra verification, not an account-action decision.")
-        case .proxySignal:
-            return text("情报将主出口标记为代理网络。", "The primary exit is flagged as a proxy network.")
-        case .vpnSignal:
-            return text("情报将主出口标记为 VPN 网络。", "The primary exit is flagged as a VPN network.")
-        case .torSignal:
-            return text("情报将主出口标记为 Tor 网络。", "The primary exit is flagged as Tor.")
-        case .abuseSignal:
-            return text("情报源记录了该主出口的滥用历史。", "The intelligence source reports abuse history for the primary exit.")
-        case .crawlerSignal:
-            return text("情报将主出口标记为爬虫/自动化流量。", "The primary exit is flagged as crawler/automation traffic.")
-        case .mobileNetwork:
-            return text("主出口被识别为移动网络；这本身不是错误。", "The primary exit is identified as mobile; this alone is not an error.")
-        case .bogonAddress:
-            return text("主出口被标记为保留或无效公网地址。", "The primary exit is flagged as bogon or non-public.")
-        case .riskIntelligenceUnavailable:
-            return text("风险情报未完整返回；缺失不等于安全。",
-                        "Risk intelligence was incomplete. Missing evidence is not safety.")
-        case .thirdPartyDisabled:
-            return text("第三方风险情报未启用；没有查询 VPN、Tor 或滥用标记。",
-                        "Third-party risk intelligence is disabled; VPN, Tor and abuse flags were not queried.")
-        case .ipv6DirectExposure:
-            return text("Claude IPv6 可从物理网络接口直连，可能绕过只匹配 IPv4 的代理规则。",
-                        "Claude IPv6 is reachable through a physical interface and may bypass IPv4-only proxy rules.")
-        case .ipv6TunnelExitMismatch:
-            return text("IPv6 虽经 TUN，但系统路径与代理路径的公网出口不同。",
-                        "IPv6 traverses TUN, but system and proxy paths expose different public exits.")
-        case .ipv6ProxyUnconfirmed:
-            return text("IPv6 经 TUN，但代理路径未返回 IPv6 出口，无法证明同一节点。",
-                        "IPv6 traverses TUN, but the proxy path returned no IPv6 exit, so the same node is unconfirmed.")
-        case .ipv6PathUnknown:
-            return text("IPv6 路径或代理归属无法确认。", "The IPv6 path or proxy ownership is uncertain.")
-        case .dnsPathLeakSuspected:
-            return text("系统 DNS 路由可能未经过预期 TUN/代理路径。",
-                        "System DNS routing may not use the expected TUN/proxy path.")
-        case .dnsPathUnverified:
-            return text("DNS 路由或响应未取得完整证据；不能当作无泄漏。",
-                        "DNS route or response evidence is incomplete and cannot be treated as leak-free.")
-        case .udpExitMismatch:
-            return text("STUN/UDP 观测到与 TCP 主出口不同的地址族出口，可能存在 UDP 旁路。",
-                        "STUN/UDP exposed a different exit from the primary TCP exit, suggesting a possible UDP bypass.")
-        case .udpExitUnverified:
-            return text("UDP 出口未取得完整证据；超时或不支持不等于安全。",
-                        "UDP exit evidence is incomplete. Timeout or lack of support is not safety.")
-        case .dualStackFallbackSuspected:
-            return text("连续双栈连接出现地址族切换、首连失败或明显变慢，可能存在 IPv6 回退。",
-                        "Consecutive dual-stack connections switched families, failed first or slowed significantly, suggesting possible IPv6 fallback.")
-        case .timeZoneMismatch:
-            return text("本机系统时区与主出口时区偏移不同。建议核对时区设置，避免长期跨时区使用同一账号。",
-                        "The system and primary-exit UTC offsets differ. Review the time-zone setting and avoid long-term cross-zone use of the same account.")
-        case .timeZoneUnverified:
-            return text("未取得可识别的出口时区；不能将缺失结果当作一致。",
-                        "No recognizable exit time zone was obtained. Missing evidence is not a match.")
-        }
-    }
-
     private func riskTitle(_ flag: EgressRiskFlag) -> String {
         switch flag {
         case .datacenter: return text("数据中心", "datacenter")
@@ -1192,6 +1141,113 @@ struct EgressAuditPage: View {
         case .crawler: return text("爬虫", "crawler")
         case .mobile: return text("移动网络", "mobile")
         case .bogon: return text("非公网地址", "bogon")
+        }
+    }
+
+}
+
+extension EgressFinding {
+    var localizedDescription: String {
+        let en = L10n.resolvedEnglish
+        switch self {
+        case .exitMismatch:
+            return en
+                ? "System and proxy exits differ, or an exit does not match the fixed target."
+                : "同一地址族的系统出口与代理出口不同，或与固定目标不一致。"
+        case .incompleteExitEvidence:
+            return en
+                ? "Only one path produced an exit; consistency cannot be proven."
+                : "只有一个路径取得出口，无法证明两路一致。"
+        case .noObservedExit:
+            return en ? "No public exit was observed." : "本次没有观察到公网出口。"
+        case .serviceUnreachable:
+            return en
+                ? "At least one Claude service did not establish TLS."
+                : "至少一个 Claude 服务未完成 TLS 连接。"
+        case .countryMismatch:
+            return en
+                ? "Countries or regions differ across observed exit IPs."
+                : "不同出口 IP 的国家/地区情报不一致。"
+        case .asnMismatch:
+            return en
+                ? "Observed exit IPs use different ASNs and may traverse different networks."
+                : "不同出口 IP 的 ASN 不一致，可能经过不同网络。"
+        case .datacenterNetwork:
+            return en
+                ? "The primary exit is flagged as datacenter/hosting. This may trigger extra verification, not an account-action decision."
+                : "情报将主出口标记为数据中心/机房网络。这可能触发额外验证，但不是封号结论。"
+        case .proxySignal:
+            return en ? "The primary exit is flagged as a proxy network." : "情报将主出口标记为代理网络。"
+        case .vpnSignal:
+            return en ? "The primary exit is flagged as a VPN network." : "情报将主出口标记为 VPN 网络。"
+        case .torSignal:
+            return en ? "The primary exit is flagged as Tor." : "情报将主出口标记为 Tor 网络。"
+        case .abuseSignal:
+            return en
+                ? "The intelligence source reports abuse history for the primary exit."
+                : "情报源记录了该主出口的滥用历史。"
+        case .crawlerSignal:
+            return en
+                ? "The primary exit is flagged as crawler/automation traffic."
+                : "情报将主出口标记为爬虫/自动化流量。"
+        case .mobileNetwork:
+            return en
+                ? "The primary exit is identified as mobile; this alone is not an error."
+                : "主出口被识别为移动网络；这本身不是错误。"
+        case .bogonAddress:
+            return en
+                ? "The primary exit is flagged as bogon or non-public."
+                : "主出口被标记为保留或无效公网地址。"
+        case .riskIntelligenceUnavailable:
+            return en
+                ? "Risk intelligence was incomplete. Missing evidence is not safety."
+                : "风险情报未完整返回；缺失不等于安全。"
+        case .thirdPartyDisabled:
+            return en
+                ? "Third-party risk intelligence is disabled; VPN, Tor and abuse flags were not queried."
+                : "第三方风险情报未启用；没有查询 VPN、Tor 或滥用标记。"
+        case .ipv6DirectExposure:
+            return en
+                ? "Claude IPv6 is reachable through a physical interface and may bypass IPv4-only proxy rules."
+                : "Claude IPv6 可从物理网络接口直连，可能绕过只匹配 IPv4 的代理规则。"
+        case .ipv6TunnelExitMismatch:
+            return en
+                ? "IPv6 traverses TUN, but system and proxy paths expose different public exits."
+                : "IPv6 虽经 TUN，但系统路径与代理路径的公网出口不同。"
+        case .ipv6ProxyUnconfirmed:
+            return en
+                ? "IPv6 traverses TUN, but the proxy path returned no IPv6 exit, so the same node is unconfirmed."
+                : "IPv6 经 TUN，但代理路径未返回 IPv6 出口，无法证明同一节点。"
+        case .ipv6PathUnknown:
+            return en ? "The IPv6 path or proxy ownership is uncertain." : "IPv6 路径或代理归属无法确认。"
+        case .dnsPathLeakSuspected:
+            return en
+                ? "System DNS routing may not use the expected TUN/proxy path."
+                : "系统 DNS 路由可能未经过预期 TUN/代理路径。"
+        case .dnsPathUnverified:
+            return en
+                ? "DNS route or response evidence is incomplete and cannot be treated as leak-free."
+                : "DNS 路由或响应未取得完整证据；不能当作无泄漏。"
+        case .udpExitMismatch:
+            return en
+                ? "STUN/UDP exposed a different exit from the primary TCP exit, suggesting a possible UDP bypass."
+                : "STUN/UDP 观测到与 TCP 主出口不同的地址族出口，可能存在 UDP 旁路。"
+        case .udpExitUnverified:
+            return en
+                ? "UDP exit evidence is incomplete. Timeout or lack of support is not safety."
+                : "UDP 出口未取得完整证据；超时或不支持不等于安全。"
+        case .dualStackFallbackSuspected:
+            return en
+                ? "Consecutive dual-stack connections switched families, failed first or slowed significantly, suggesting possible IPv6 fallback."
+                : "连续双栈连接出现地址族切换、首连失败或明显变慢，可能存在 IPv6 回退。"
+        case .timeZoneMismatch:
+            return en
+                ? "The system and primary-exit UTC offsets differ. Review the time-zone setting and avoid long-term cross-zone use of the same account."
+                : "本机系统时区与主出口时区偏移不同。建议核对时区设置，避免长期跨时区使用同一账号。"
+        case .timeZoneUnverified:
+            return en
+                ? "No recognizable exit time zone was obtained. Missing evidence is not a match."
+                : "未取得可识别的出口时区；不能将缺失结果当作一致。"
         }
     }
 }

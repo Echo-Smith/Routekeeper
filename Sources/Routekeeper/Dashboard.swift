@@ -2,12 +2,13 @@ import SwiftUI
 import GuardCore
 
 enum GuardPage: String, CaseIterable, Identifiable {
-    case home, inspection, protection, settings
+    case home, inspection, sandbox, protection, settings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .home: return L10n.resolvedEnglish ? "Home" : "首页"
         case .inspection: return L10n.resolvedEnglish ? "Network check" : "网络体检"
+        case .sandbox: return L10n.resolvedEnglish ? "Sandbox" : "沙箱"
         case .protection: return L10n.resolvedEnglish ? "Protection" : "保护"
         case .settings: return L10n.resolvedEnglish ? "Settings" : "设置"
         }
@@ -16,6 +17,7 @@ enum GuardPage: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "house"
         case .inspection: return "waveform.path.ecg.rectangle"
+        case .sandbox: return "lock.shield"
         case .protection: return "shield.lefthalf.filled"
         case .settings: return "gearshape"
         }
@@ -23,22 +25,20 @@ enum GuardPage: String, CaseIterable, Identifiable {
 }
 
 enum ProtectionSection: String, CaseIterable, Identifiable {
-    case settings, sandbox, authentication, advancedNetwork
+    case authentication, networkSettings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .settings: return L10n.resolvedEnglish ? "Protection settings" : "保护设置"
-        case .sandbox: return L10n.resolvedEnglish ? "Experimental sandbox" : "实验性进程沙箱"
         case .authentication: return L10n.resolvedEnglish ? "Claude Code sign-in" : "Claude Code 登录凭证"
-        case .advancedNetwork: return L10n.resolvedEnglish ? "Advanced network protection" : "高级网络保护"
+        case .networkSettings: return L10n.resolvedEnglish ? "Network protection" : "网络保护"
         }
     }
 }
 
-private enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, events, cleanup, localData, disclaimer, about
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general, events, cleanup, about
 
     var id: String { rawValue }
 
@@ -47,8 +47,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: return L10n.resolvedEnglish ? "General" : "通用"
         case .events: return L10n.resolvedEnglish ? "Run log" : "运行记录"
         case .cleanup: return L10n.resolvedEnglish ? "Cleanup" : "清理"
-        case .localData: return L10n.resolvedEnglish ? "Local data" : "本地信息"
-        case .disclaimer: return L10n.resolvedEnglish ? "Disclaimer" : "免责声明"
         case .about: return L10n.resolvedEnglish ? "About" : "关于"
         }
     }
@@ -58,10 +56,9 @@ struct Dashboard: View {
     @Bindable var store: GuardStore
     @State private var page: GuardPage = .home
     @State private var sidebarCollapsed = false
-    @State private var showProxyName = false
-    @State private var proxyNameRevision = 0
-    @State private var protectionSection: ProtectionSection = .settings
+    @State private var protectionSection: ProtectionSection = .authentication
     @State private var settingsSection: SettingsSection = .general
+    @State private var sandboxSection: SandboxSection = .overview
     @State private var headerHasScrolledContent = false
     private func text(_ zh: String, _ en: String) -> String { L10n.resolvedEnglish ? en : zh }
     @ScaledMetric(relativeTo: .title2) private var pageHeaderSize: CGFloat = 22
@@ -69,154 +66,8 @@ struct Dashboard: View {
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("routekeeper.disclaimer-accepted-version") private var disclaimerAcceptedVersion = ""
     @State private var showDisclaimerGate = false
-    @State private var confirmClearLocalData = false
-    @State private var localDataResetNotice = ""
-    private var homeHasProxyPath: Bool {
-        guard let snapshot = store.snapshot else { return false }
-        return ["proxy-client", "proxy"].allSatisfy { id in
-            snapshot.checks.first(where: { $0.id == id })?.level == .passed
-        }
-    }
-
-    private var homeCheckReady: Bool {
-        store.snapshot?.ready == true
-    }
-
-    private var homeHasSavedExit: Bool {
-        store.settings.target(for: .ipv4) != nil
-            || store.settings.target(for: .ipv6) != nil
-    }
-
-    private var homeGatewayReadyForMonitoring: Bool {
-        store.settings.gatewayProtectionMode == .off
-            || store.gatewayVerification.isFreshlyVerified(for: store.settings.gatewayProtectionMode)
-    }
-
-    private var homeSetupSteps: [HomeSetupStepItem] {
-        let completed = [
-            homeHasProxyPath,
-            homeCheckReady,
-            homeHasSavedExit,
-            store.monitoring
-        ]
-        let titles = [
-            text("1  代理", "1  Proxy"),
-            text("2  体检", "2  Check"),
-            text("3  出口", "3  Exit"),
-            text("4  监控", "4  Monitor")
-        ]
-        var currentAssigned = false
-        return titles.indices.map { index in
-            let state: HomeSetupStepState
-            if completed[index] {
-                state = .complete
-            } else if store.snapshot != nil && (index == 0 || index == 1) {
-                state = .attention
-            } else if !currentAssigned {
-                state = .current
-                currentAssigned = true
-            } else {
-                state = .pending
-            }
-            return HomeSetupStepItem(
-                id: index,
-                title: titles[index],
-                detail: homeSetupStepDetail(index, state: state),
-                state: state
-            )
-        }
-    }
-
-    private func homeSetupStepDetail(_ index: Int, state: HomeSetupStepState) -> String {
-        switch index {
-        case 0:
-            if state == .complete {
-                return text("已识别代理客户端和系统代理入口。", "Proxy client and system proxy entry detected.")
-            }
-            return state == .attention
-                ? text("体检没有识别到可用代理，请先打开代理。", "The check found no usable proxy. Start your proxy first.")
-                : text("打开代理客户端，选好节点并开启系统代理或 TUN。", "Start your proxy, choose a node and enable system proxy or TUN.")
-        case 1:
-            if state == .complete {
-                return text("本次体检的必需项目已通过。", "Required checks passed in the latest run.")
-            }
-            return state == .attention
-                ? text("体检已经运行，但仍有项目要多看一眼。", "The check ran, but some items still need attention.")
-                : text("运行一次完整体检，看看代理和出口是否正常。", "Run a full check to verify the proxy path and exit.")
-        case 2:
-            if let exit = store.settings.target(for: .ipv4) ?? store.settings.target(for: .ipv6) {
-                return text("已保存 \(exit)", "Saved \(exit)")
-            }
-            return text("结果一致时点“自动获取出口”。", "When results match, choose “Auto-detect exit.”")
-        case 3:
-            if store.monitoring {
-                return text("监控正在运行。", "Monitoring is running.")
-            }
-            return homeGatewayReadyForMonitoring
-                ? text("条件满足后点“开启监控”。", "When ready, choose “Start monitoring.”")
-                : text("先完成所选代理网关的断开与恢复测试。", "Finish the selected proxy-gateway disconnect and recovery checks.")
-        default:
-            return ""
-        }
-    }
-
-    private var homeSetupAction: HomeSetupAction {
-        if !homeHasProxyPath || store.snapshot == nil || !homeCheckReady || !homeHasSavedExit {
-            return .inspection
-        }
-        if !homeGatewayReadyForMonitoring {
-            return .gatewayCheck
-        }
-        return .startMonitoring
-    }
-
-    private var homeSetupAdvice: String {
-        switch homeSetupAction {
-        case .inspection:
-            if store.snapshot == nil {
-                return text(
-                    "先打开代理，再运行网络体检。体检会检查代理路径、系统路由和出口是否对得上。",
-                    "Start the proxy, then run a network check. It compares the proxy path, system route and exit."
-                )
-            }
-            if !homeHasProxyPath {
-                return text(
-                    "当前没有识别到可用代理。确认代理客户端正在运行、系统代理或 TUN 已开启，然后重新体检。",
-                    "No usable proxy was detected. Confirm the proxy client is running and system proxy or TUN is enabled, then check again."
-                )
-            }
-            if !homeCheckReady {
-                return text(
-                    "体检还有一些项目没有通过。先查看待处理项，再重新检查。",
-                    "Some checks have not passed. Review the items that need attention and run the check again."
-                )
-            }
-            return text(
-                "点“自动获取出口”保存当前一致结果，之后才能开启监控。",
-                "Use Auto-detect exit to save the current matching result before starting monitoring."
-            )
-        case .gatewayCheck:
-            return text(
-                "你选择了代理网关保护。按提示完成节点断开、代理退出和恢复后的检查。",
-                "Proxy gateway protection is selected. Complete the node-failure, client-exit and recovery checks."
-            )
-        case .startMonitoring:
-            return text(
-                "代理、出口和保护范围已经准备好。开启后，Routekeeper 会定期复查。",
-                "Proxy, exit and protection scope are ready. Routekeeper will keep checking after monitoring starts."
-            )
-        }
-    }
-
-    private func performHomeSetupAction(_ action: HomeSetupAction) {
-        switch action {
-        case .inspection, .gatewayCheck:
-            selectPage(.inspection)
-        case .startMonitoring:
-            Task { await store.start() }
-        }
-    }
-
+    @State private var confirmLocalDataInCleanup = false
+    @State private var expandedCleanupGroups: Set<String> = []
     var statusColor: Color {
         if store.settings.experimentalSandboxEnabled {
             switch store.sandbox.phase {
@@ -228,9 +79,7 @@ struct Dashboard: View {
         return store.policy.phase == .incident ? .orange : store.policy.phase == .armed ? appAccent : .secondary
     }
     private var sidebarWidth: CGFloat { sidebarCollapsed ? 76 : 200 }
-    private var pageHorizontalPadding: CGFloat {
-        page == .settings && settingsSection == .disclaimer ? 18 : 22
-    }
+    private var pageHorizontalPadding: CGFloat { 22 }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -272,7 +121,7 @@ struct Dashboard: View {
         .preferredColorScheme(appearanceOverride)
         .onAppear {
             applyNavigationRequest()
-            if disclaimerAcceptedVersion != DisclaimerPage.currentVersion {
+            if disclaimerAcceptedVersion != DisclaimerDocument.currentVersion {
                 showDisclaimerGate = true
             }
         }
@@ -282,7 +131,7 @@ struct Dashboard: View {
         .sheet(isPresented: $showDisclaimerGate) {
             DisclaimerConsentSheet(
                 onAgree: {
-                    disclaimerAcceptedVersion = DisclaimerPage.currentVersion
+                    disclaimerAcceptedVersion = DisclaimerDocument.currentVersion
                     showDisclaimerGate = false
                 },
                 onQuit: {
@@ -305,11 +154,15 @@ struct Dashboard: View {
 
     private func applyNavigationRequest() {
         let requestedSection = AppNavigationRequest.consumePendingProtectionSection()
+        let requestedSettings = AppNavigationRequest.consumePendingSettingsSection()
         if let requested = AppNavigationRequest.consumePendingPage() {
             selectPage(requested)
         }
         if let requestedSection {
             protectionSection = requestedSection
+        }
+        if let requestedSettings {
+            settingsSection = requestedSettings
         }
     }
 
@@ -401,7 +254,7 @@ struct Dashboard: View {
                 }
             }
             .padding(.leading, 18)
-        case .home, .inspection:
+        case .home, .inspection, .sandbox:
             EmptyView()
         }
     }
@@ -416,18 +269,11 @@ struct Dashboard: View {
             SidebarToggleButton(collapsed: sidebarCollapsed) {
                 withAnimation(.easeInOut(duration: 0.18)) { sidebarCollapsed.toggle() }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                if let sectionTitle = currentSectionTitle {
-                    Text(page.title)
-                        .foregroundStyle(.secondary)
-                    Text("/")
-                        .foregroundStyle(.tertiary)
-                    Text(sectionTitle)
-                        .foregroundStyle(.primary)
-                } else {
-                    Text(page.title)
-                }
-            }
+            PageHeaderBreadcrumb(
+                pageTitle: page.title,
+                sectionTitle: currentSectionTitle,
+                onOpenRoot: { selectPage(page) }
+            )
             .font(.system(size: pageHeaderSize, weight: .semibold))
             .tracking(-0.45)
             .lineLimit(1)
@@ -462,6 +308,7 @@ struct Dashboard: View {
         switch page {
         case .protection: return protectionSection.title
         case .settings: return settingsSection.title
+        case .sandbox: return sandboxSection.title
         case .home, .inspection: return nil
         }
     }
@@ -470,15 +317,18 @@ struct Dashboard: View {
         switch page {
         case .protection: return "protection-\(protectionSection.rawValue)"
         case .settings: return "settings-\(settingsSection.rawValue)"
+        case .sandbox: return "sandbox-\(sandboxSection.rawValue)"
         case .home, .inspection: return page.rawValue
         }
     }
 
     private func selectPage(_ newPage: GuardPage) {
         if newPage == .protection {
-            protectionSection = .settings
+            protectionSection = .authentication
         } else if newPage == .settings {
             settingsSection = .general
+        } else if newPage == .sandbox {
+            sandboxSection = .overview
         }
         headerHasScrolledContent = false
         withAnimation(.easeInOut(duration: 0.16)) {
@@ -524,18 +374,19 @@ struct Dashboard: View {
         case .home: homePage
         case .inspection:
             if store.settings.experimentalSandboxEnabled {
-                sandboxModeNotice
+                SandboxPage(store: store, mode: .networkCheck)
             } else {
                 InspectionPage(
                     store: store,
                     audit: store.egressAudit,
-                    onOpenProtection: { selectPage(.protection) },
-                    onOpenAdvancedNetwork: {
+                    onOpenNetworkSettings: {
                         selectPage(.protection)
-                        protectionSection = .advancedNetwork
+                        protectionSection = .networkSettings
                     }
                 )
             }
+        case .sandbox:
+            SandboxPage(store: store, mode: .management, section: $sandboxSection)
         case .protection: protectionPage
         case .settings: settingsPage
         }
@@ -545,23 +396,24 @@ struct Dashboard: View {
         VStack(alignment: .leading, spacing: 16) {
             if store.settings.experimentalSandboxEnabled {
                 homeSandboxCard
-                homeSandboxBoundaryCard
-            } else {
-                if !store.monitoring {
-                    homeSetupGuideCard
+                HStack(alignment: .top, spacing: 16) {
+                    homeProtectionCard
+                    if store.settings.gatewayProtectionMode != .off {
+                        homeGatewayCard
+                    } else {
+                        homeEgressCard
+                    }
                 }
+            } else {
                 homeStatusCard
-                homeSandboxIntroCard
-                homeGatewayCard
+                if store.settings.gatewayProtectionMode != .off {
+                    homeGatewayCard
+                }
                 HStack(alignment: .top, spacing: 16) {
                     homeProtectionCard
                     homeEgressCard
                 }
-                homeActivityCard
             }
-            Text(L("overview.boundary"))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -605,242 +457,22 @@ struct Dashboard: View {
             }
             .font(.callout.weight(.medium))
 
-            AppHairline()
             HStack {
-                Text(text("普通网络监控在沙箱模式下暂停，状态与异常处理不会和隔离状态混用。",
-                           "Ordinary network monitoring is paused in sandbox mode so its status and actions do not conflict with isolation state."))
+                Text(text("普通网络监控已暂停", "Ordinary monitoring is paused"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button {
-                    protectionSection = .sandbox
-                    selectPage(.protection)
+                    selectPage(.sandbox)
                 } label: {
                     Label(text("打开沙箱", "Open sandbox"), systemImage: "lock.shield")
                 }
                 .routekeeperProminentButton()
                 .accessibilityIdentifier("home-open-sandbox")
             }
-
-            if store.sandbox.phase == .running {
-                Button {
-                    store.pauseSandboxNetwork()
-                } label: {
-                    Label(text("立即关闭沙箱网络", "Turn sandbox network off"), systemImage: "wifi.slash")
-                }
-            } else if store.sandbox.phase == .networkPaused {
-                Button {
-                    Task { await store.resumeSandboxNetwork() }
-                } label: {
-                    Label(text("恢复沙箱网络", "Turn sandbox network back on"), systemImage: "wifi")
-                }
-            }
         }
         .padding(22)
         .cardSurface(corner: 22)
-    }
-
-    private var homeSandboxBoundaryCard: some View {
-        GuardCard(
-            title: text("本次隔离能做什么", "What this isolation covers"),
-            subtitle: text(
-                "文件访问、子进程继承和网络失败关闭。",
-                "File boundaries, child-process inheritance and fail-closed networking."
-            )
-        ) {
-            VStack(alignment: .leading, spacing: 9) {
-                Label(text("原项目不会被沙箱直接修改，变化留在工作副本中等待审阅。",
-                           "The original project is not modified directly; changes remain in the workspace copy for review."),
-                      systemImage: "folder.badge.questionmark")
-                Label(text("断开网络后已有连接与新连接都会失败，不会自动改走直连。",
-                           "Turning the network off closes existing connections and prevents new direct or relayed connections."),
-                      systemImage: "wifi.slash")
-                Label(text("localhost 项目服务器和默认浏览器启动会被拒绝，避免绕过中继。",
-                           "Localhost project servers and default-browser launches are blocked to prevent relay bypasses."),
-                      systemImage: "rectangle.slash")
-                Label(text("它仍是实验性进程隔离，不是虚拟机，也不能保证账号或设备指纹结果。",
-                           "This remains experimental process isolation, not a virtual machine, and cannot guarantee account or device-fingerprint outcomes."),
-                      systemImage: "exclamationmark.shield")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var homeSetupGuideCard: some View {
-        let steps = homeSetupSteps
-        let action = homeSetupAction
-        return GuardCard(
-            title: text("开始使用", "Get started"),
-            subtitle: text(
-                "按顺序完成下面四步，不需要先开启沙箱。每一步都会告诉你现在该做什么。",
-                "Complete these four steps in order. The sandbox is optional and is not required for ordinary monitoring."
-            )
-        ) {
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(steps) { step in
-                    homeSetupStep(step)
-                }
-            }
-
-            AppHairline()
-
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: action.symbol)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(action.color)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        action.color.opacity(0.10),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(text("下一步", "Next step"))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(action.color)
-                    Text(homeSetupAdvice)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 10)
-                Button(action.title) {
-                    performHomeSetupAction(action)
-                }
-                .routekeeperProminentButton()
-                .disabled(store.checking)
-                .accessibilityIdentifier("home-setup-action")
-            }
-        }
-    }
-
-    private func homeSetupStep(_ step: HomeSetupStepItem) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 7) {
-                Image(systemName: step.state.symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(step.state.color)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        step.state.color.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    )
-                Text(step.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(step.state == .pending ? .secondary : .primary)
-            }
-            Text(step.detail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, minHeight: 68, alignment: .topLeading)
-        .padding(10)
-        .background(
-            step.state.color.opacity(step.state == .pending ? 0.025 : 0.065),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(step.state.color.opacity(step.state == .pending ? 0.06 : 0.16), lineWidth: 0.7)
-        }
-    }
-
-    private var homeSandboxIntroCard: some View {
-        GuardCard(
-            title: text("可选：实验性进程沙箱", "Optional: experimental process sandbox"),
-            subtitle: text(
-                "普通网络监控已经可以独立使用；沙箱用于进一步限制 Claude Code 能改哪些文件、能从哪里联网。",
-                "Ordinary monitoring works on its own. The sandbox adds narrower file and network boundaries for Claude Code."
-            )
-        ) {
-            VStack(alignment: .leading, spacing: 9) {
-                Label(
-                    text(
-                        "适合想把修改留在项目副本里，或希望代理断开时 Claude Code 直接无法联网的情况。",
-                        "Useful when you want changes kept in a project copy or want Claude Code to fail closed when the proxy is unavailable."
-                    ),
-                    systemImage: "folder.badge.questionmark"
-                )
-                Label(
-                    text(
-                        "它会复制项目、限制可访问目录，并把网络收束到 Routekeeper 的本地中继。",
-                        "It copies the project, limits accessible folders and routes network traffic through the Routekeeper relay."
-                    ),
-                    systemImage: "arrow.triangle.branch"
-                )
-                Label(
-                    text(
-                        "开启后普通网络监控会暂停；两套模式不会同时运行。",
-                        "Ordinary monitoring pauses while sandbox mode is on; the two modes do not run together."
-                    ),
-                    systemImage: "pause.circle"
-                )
-                Label(
-                    text(
-                        "它依赖 macOS 的实验接口，不是虚拟机，也不保证兼容性、账号判断或设备指纹结果。",
-                        "It relies on experimental macOS interfaces. It is not a virtual machine and cannot guarantee compatibility, account decisions or device-fingerprint outcomes."
-                    ),
-                    systemImage: "exclamationmark.shield"
-                )
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Text(text("需要这些额外限制时再开启。", "Enable it only when you need these additional limits."))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Button {
-                    protectionSection = .settings
-                    selectPage(.protection)
-                } label: {
-                    Label(text("了解并设置沙箱", "Review sandbox settings"), systemImage: "lock.shield")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("home-sandbox-intro")
-            }
-        }
-    }
-
-    private var sandboxModeNotice: some View {
-        let active = store.sandbox.phase.isActive
-        return GuardCard(
-            title: active
-                ? text("普通网络体检已暂停", "Ordinary network checks are paused")
-                : text("实验性进程沙箱模式已开启", "Experimental sandbox mode is on"),
-            subtitle: text(
-                active
-                    ? "当前由实验性进程沙箱管理 Claude Code 的文件和网络边界。"
-                    : "当前没有运行中的沙箱会话，普通网络体检在模式关闭前保持暂停。",
-                active
-                    ? "The experimental process sandbox currently manages Claude Code's file and network boundaries."
-                    : "No sandbox session is running. Ordinary network checks stay paused until sandbox mode is turned off."
-            )
-        ) {
-            Text(text(
-                active
-                    ? "请在“保护 → 实验性进程沙箱”中查看启动检查、关闭或恢复网络，以及审阅工作副本。若要恢复普通网络体检，请先结束会话，再在保护设置中关闭沙箱模式。"
-                    : "可在“保护 → 实验性进程沙箱”中审阅工作副本或创建新会话；若要恢复普通网络体检，请在保护设置中关闭沙箱模式。",
-                active
-                    ? "Use Protection → Experimental sandbox to review preflight checks, turn network access off or back on, and review the workspace. To restore ordinary network checks, end the session and turn sandbox mode off in Protection settings."
-                    : "Use Protection → Experimental sandbox to review the workspace or create a new session. To restore ordinary network checks, turn sandbox mode off in Protection settings."
-            ))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            Button {
-                protectionSection = .sandbox
-                selectPage(.protection)
-            } label: {
-                Label(text("打开实验性进程沙箱", "Open experimental process sandbox"), systemImage: "lock.shield")
-            }
-            .routekeeperProminentButton()
-        }
     }
 
     private var homeStatusCard: some View {
@@ -950,7 +582,7 @@ struct Dashboard: View {
                 Button(text("打开检查", "Open check")) {
                     selectPage(.inspection)
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
                 .accessibilityIdentifier("home-gateway-open-check")
             }
         }
@@ -1002,6 +634,7 @@ struct Dashboard: View {
                 Spacer()
                 Button {
                     selectPage(.protection)
+                    protectionSection = .networkSettings
                 } label: {
                     Label(text("管理保护范围", "Manage protection"), systemImage: "chevron.right")
                         .labelStyle(.titleAndIcon)
@@ -1020,8 +653,7 @@ struct Dashboard: View {
         let enabled = store.settings.includes(kind)
         let installed: Bool = {
             if kind == .desktop {
-                return store.snapshot?.desktopPath != nil
-                    || ApplicationDiscovery.path(bundleID: ApplicationDiscovery.desktopID, name: "Claude") != nil
+                return store.desktopInstalled
             }
             return store.codeInstalled
         }()
@@ -1140,7 +772,7 @@ struct Dashboard: View {
                     Label(text("开始出口体检", "Run egress check"),
                           systemImage: "arrow.up.right")
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
@@ -1169,69 +801,6 @@ struct Dashboard: View {
                 .multilineTextAlignment(.trailing)
         }
         .padding(.vertical, 5)
-    }
-
-    private var homeActivityCard: some View {
-        GuardCard(
-            title: text("最近变化", "Recent activity"),
-            subtitle: text("最近的监控、网络变化与检查结果。",
-                           "Recent monitoring, network changes and check results.")
-        ) {
-            if store.events.isEmpty {
-                Label(text("暂无运行记录；完成一次自检后会显示在这里。",
-                           "No activity yet. A completed check will appear here."),
-                      systemImage: "clock")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(store.events.prefix(4))) { event in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: event.isAttention
-                                  ? "exclamationmark.circle.fill"
-                                  : "circle.fill")
-                                .font(.system(size: event.isAttention ? 13 : 6, weight: .medium))
-                                .foregroundStyle(event.isAttention ? Color.orange : appAccent)
-                                .frame(width: 18, height: 18)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(event.message)
-                                    .font(.callout)
-                                    .lineLimit(2)
-                                Text(homeRelativeTime(event.time))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 7)
-                        if event.id != store.events.prefix(4).last?.id {
-                            AppHairline()
-                        }
-                    }
-                }
-            }
-            HStack {
-                if store.events.count > 4 {
-                    Text(text("另有 \(store.events.count - 4) 条记录", "\(store.events.count - 4) more entries"))
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Button {
-                    settingsSection = .events
-                    headerHasScrolledContent = false
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        page = .settings
-                    }
-                } label: {
-                    Label(text("查看运行记录", "Open run log"), systemImage: "chevron.right")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.plain)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(appAccent)
-                .accessibilityIdentifier("home-open-run-log")
-            }
-        }
     }
 
     private var homePassedChecks: Int {
@@ -1381,161 +950,15 @@ struct Dashboard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    var protectionSettingsPage: some View {
-        VStack(spacing: 16) {
-            GuardCard(
-                title: text("实验性进程沙箱", "Experimental process sandbox"),
-                subtitle: text(
-                    "可选模式：限制 Claude Code 的文件访问、子进程网络和本项目修改范围。",
-                    "Optional mode: restrict Claude Code file access, child-process networking and project changes."
-                )
-            ) {
-                Toggle(
-                    text("开启实验性进程沙箱", "Enable experimental process sandbox"),
-                    isOn: Binding(
-                        get: { store.settings.experimentalSandboxEnabled },
-                        set: { enabled in
-                            if !enabled && store.sandbox.phase.isActive {
-                                store.notice = text(
-                                    "请先在“实验性进程沙箱”中结束当前会话，再关闭此模式。",
-                                    "End the active session in Experimental sandbox before turning this mode off."
-                                )
-                                return
-                            }
-                            store.settings.experimentalSandboxEnabled = enabled
-                        }
-                    )
-                )
-                .toggleStyle(.switch)
-                Text(text(
-                    "开启后，普通网络监控会暂停。此功能依赖 macOS 的 sandbox-exec，自检失败时会停止启动，不会退回无限制运行。",
-                    "Ordinary monitoring pauses while this mode is on. It relies on macOS sandbox-exec and fails closed instead of falling back to an unrestricted launch."
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            GuardCard(title: L("card.protect"), subtitle: L("card.protect.sub")) {
-                protectToggle(isOn: $store.settings.protectDesktop, icon: "macwindow", label: L("protect.desktop"), available: store.desktopInstalled, unavailableHint: L("protect.desktop.unavailable"))
-                Divider().padding(.vertical, 4)
-                protectToggle(isOn: $store.settings.protectCode, icon: "terminal", label: L("protect.code"), available: store.codeInstalled, unavailableHint: L("protect.code.unavailable"))
-                Text(L("protect.code.hint")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.disabled(store.monitoring || store.checking || store.networkFilter.configured || store.networkFilter.busy || store.settings.experimentalSandboxEnabled)
-
-            GuardCard(title: L("card.target"), subtitle: L("card.target.sub")) {
-                fixedExitRow(
-                    family: .ipv4,
-                    label: L10n.resolvedEnglish ? "IPv4 fixed exit" : "IPv4 固定出口",
-                    placeholder: L10n.resolvedEnglish ? "IPv4 exit address" : "IPv4 出口地址"
-                )
-                Divider().padding(.vertical, 2)
-                fixedExitRow(
-                    family: .ipv6,
-                    label: L10n.resolvedEnglish ? "IPv6 fixed exit" : "IPv6 固定出口",
-                    placeholder: L10n.resolvedEnglish ? "IPv6 exit address" : "IPv6 出口地址"
-                )
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(L("target.guide.title")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    Text(L("target.guide.1")).font(.caption).foregroundStyle(.secondary)
-                    Text(L("target.guide.2")).font(.caption).foregroundStyle(.secondary)
-                    Text(L("target.guide.3")).font(.caption).foregroundStyle(.secondary)
-                }
-                Text(L("target.hint")).font(.caption2).foregroundStyle(.tertiary)
-            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
-
-            GuardCard(title: L10n.resolvedEnglish ? "Network checks" : "网络检测", subtitle: L10n.resolvedEnglish ? "Unknown probe results prevent monitoring" : "所选检查项目都通过后，才能开启监控") {
-                HStack {
-                    Text(text("代理客户端", "Proxy client"))
-                    Spacer()
-                    Menu {
-                        ForEach(ProxyClient.allCases, id: \.self) { client in
-                            Button(client.title) {
-                                store.settings.proxyClient = client
-                                showProxyName = true
-                                proxyNameRevision += 1
-                            }
-                        }
-                    } label: {
-                        Text(showProxyName
-                             ? text("已配置（\(store.settings.proxyClient.title)）", "Configured (\(store.settings.proxyClient.title))")
-                             : text("已配置", "Configured"))
-                    }
-                    .accessibilityIdentifier("proxy-client")
-                    .task(id: proxyNameRevision) {
-                        guard showProxyName else { return }
-                        do { try await Task.sleep(for: .seconds(3)) } catch { return }
-                        showProxyName = false
-                    }
-                }
-                HStack {
-                    Text(L10n.resolvedEnglish ? "Polling delay (seconds)" : "检查间隔（秒）")
-                    TextField("1–300", value: $store.settings.pollInterval, format: .number)
-                        .textFieldStyle(.roundedBorder).frame(width: 90).accessibilityIdentifier("poll-interval")
-                    Stepper("", value: $store.settings.pollInterval, in: 1...300, step: 1).labelsHidden()
-                }
-                if !store.settings.validInterval { Text(L10n.resolvedEnglish ? "Enter a value from 1 to 300." : "请输入 1–300 秒，填写后才能开启监控。").foregroundStyle(.orange) }
-                Text(L10n.resolvedEnglish ? "Wait after each completed round; requests take additional time. Network changes trigger immediate invalidation and revalidation." : "每轮检查完成后，等待这段时间再检查。切换网络时会立即重新检查。")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle(L10n.resolvedEnglish ? "Probe DNS resolver routes and responses" : "检测 DNS 解析器路由与有效响应", isOn: $store.settings.dnsProbeEnabled)
-                Toggle(L10n.resolvedEnglish ? "Probe UDP egress with two STUN servers" : "用两处 STUN 服务检测 UDP 出口", isOn: $store.settings.udpProbeEnabled)
-                Text(L10n.resolvedEnglish ? "Disabled probes remain unverified. STUN is not a full browser WebRTC test. Probe services see your current egress IP." : "关闭的项目会显示未验证。STUN 不等于完整浏览器 WebRTC 测试；探测服务会看到当前出口 IP。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
-
-            GuardCard(title: L("card.action"), subtitle: L("card.action.sub")) {
-                Picker("检测到异常时", selection: $store.settings.action) {
-                    ForEach(IncidentAction.allCases, id: \.self) { action in
-                        Text(action == .notify ? L("action.notify") : L("action.terminate")).tag(action)
-                    }
-                }.pickerStyle(.menu).frame(maxWidth: 430)
-                Text(store.settings.action == .terminate ? L("action.terminate.hint") : L("action.notify.hint"))
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.disabled(store.monitoring || store.checking || store.settings.experimentalSandboxEnabled)
-        }
-    }
-
     @ViewBuilder
     var protectionPage: some View {
         switch protectionSection {
-        case .settings:
-            VStack(spacing: 16) {
-                protectionSettingsPage
-                navigationToolCard(
-                    title: text("实验性进程沙箱", "Experimental process sandbox"),
-                    subtitle: store.settings.experimentalSandboxEnabled
-                        ? store.sandbox.statusTitle
-                        : text("需要先在保护设置中开启", "Enable it in Protection settings first"),
-                    symbol: "lock.shield",
-                    identifier: "tool-card-sandbox"
-                ) {
-                    protectionSection = .sandbox
-                }
-                navigationToolCard(
-                    title: text("Claude Code 登录凭证", "Claude Code sign-in"),
-                    subtitle: authenticationSummary,
-                    symbol: "person.badge.key",
-                    identifier: "tool-card-authentication"
-                ) {
-                    protectionSection = .authentication
-                }
-                navigationToolCard(
-                    title: L10n.resolvedEnglish ? "Advanced network protection" : "高级网络保护",
-                    subtitle: advancedNetworkSummary,
-                    symbol: "network.badge.shield.half.filled",
-                    identifier: "tool-card-advanced-network"
-                ) {
-                    protectionSection = .advancedNetwork
-                }
-            }
         case .authentication:
             AuthenticationPage(
                 controller: store.authentication,
                 launchAction: { store.launchFromAuthentication() }
             )
-        case .sandbox:
-            SandboxPage(store: store)
-        case .advancedNetwork:
+        case .networkSettings:
             NetworkProtectionPage(store: store)
         }
     }
@@ -1547,12 +970,6 @@ struct Dashboard: View {
             VStack(spacing: 16) {
                 appSettingsPage
                 navigationToolCard(
-                    title: text("免责声明", "Disclaimer"),
-                    subtitle: text("查看使用条款与隐私说明", "Terms of use and privacy"),
-                    symbol: "doc.text",
-                    identifier: "tool-card-disclaimer"
-                ) { settingsSection = .disclaimer }
-                navigationToolCard(
                     title: L("page.events"),
                     subtitle: text("\(store.events.count) 条本机记录", "\(store.events.count) local events"),
                     symbol: "clock.arrow.circlepath",
@@ -1562,25 +979,16 @@ struct Dashboard: View {
                 }
                 navigationToolCard(
                     title: L("page.cleanup"),
-                    subtitle: text("清理 Claude 缓存与日志", "Clean Claude caches and logs"),
+                    subtitle: text("清理缓存与日志，或重置 Routekeeper 本地信息",
+                                   "Clean caches and logs, or reset Routekeeper local data"),
                     symbol: "trash.circle",
                     identifier: "tool-card-cleanup"
                 ) {
                     settingsSection = .cleanup
                 }
                 navigationToolCard(
-                    title: text("清空本地信息", "Clear local data"),
-                    subtitle: text("重置 Routekeeper 设置、报告、凭证和沙箱副本",
-                                   "Reset Routekeeper settings, reports, credentials and sandbox copies"),
-                    symbol: "externaldrive.badge.minus",
-                    identifier: "tool-card-local-data"
-                ) {
-                    localDataResetNotice = ""
-                    settingsSection = .localData
-                }
-                navigationToolCard(
                     title: text("关于", "About"),
-                    subtitle: text("查看版本信息", "View version information"),
+                    subtitle: text("版本、用途边界与免责声明", "Version, purpose and disclaimer"),
                     symbol: "info.circle",
                     identifier: "tool-card-about"
                 ) {
@@ -1591,32 +999,9 @@ struct Dashboard: View {
             eventsPage
         case .cleanup:
             cleanupPage
-        case .localData:
-            localDataPage
-        case .disclaimer:
-            DisclaimerPage(onQuit: { confirmQuit(store) })
         case .about:
-            AboutPage()
+            AboutPage(onQuit: { confirmQuit(store) })
         }
-    }
-
-    var authenticationSummary: String {
-        switch store.authentication.status {
-        case .saved: return text("登录凭证已保存", "Authentication saved in Keychain")
-        case .missing: return text("尚未配置，可选", "Not configured, optional")
-        case .error: return text("需要处理", "Action required")
-        }
-    }
-
-    var advancedNetworkSummary: String {
-        let status = store.gatewayVerification.status(for: store.settings.gatewayProtectionMode)
-        if status == .verified {
-            return text("代理网关已验证", "Gateway verified")
-        }
-        if store.settings.gatewayProtectionMode != .off {
-            return text("已选择保护方式，等待网关检查", "Protection selected; gateway check pending")
-        }
-        return text("可选择分流保护或仅限制 Claude", "Choose split routing or Claude-only restriction")
     }
 
     private func homeGatewayTitle(
@@ -1701,51 +1086,6 @@ struct Dashboard: View {
         .accessibilityLabel("\(title)，\(subtitle)")
     }
 
-    @ViewBuilder func fixedExitRow(family: IPFamily, label: String, placeholder: String) -> some View {
-        let availabilityKnown = store.activeFamilies != nil
-        let available = family == .ipv4 || !availabilityKnown || store.activeFamilies?.contains(family) == true
-        HStack(spacing: 10) {
-            Label(label, systemImage: family == .ipv4 ? "4.circle" : "6.circle")
-                .frame(width: 132, alignment: .leading)
-            TextField(placeholder, text: Binding(
-                get: { store.settings.fixedExit(for: family) },
-                set: { store.settings.setFixedExit($0, for: family) }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-            .accessibilityIdentifier("fixed-exit-\(family.rawValue)")
-            Button {
-                Task { await store.adoptObservedExit(family: family) }
-            } label: {
-                Label(L("action.autoExit"), systemImage: "wand.and.stars")
-            }
-            .disabled(!available || store.monitoring || store.checking)
-            if !available {
-                Text(text("未启用，已关闭", "Disabled on this Mac"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .disabled(!available || store.monitoring || store.checking)
-    }
-
-    @ViewBuilder func protectToggle(isOn: Binding<Bool>, icon: String, label: String, available: Bool, unavailableHint: String) -> some View {
-        HStack {
-            Label(label, systemImage: icon)
-            if !available {
-                Text(unavailableHint).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Toggle("", isOn: Binding(
-                get: { available && isOn.wrappedValue },
-                set: { guard available else { return }; isOn.wrappedValue = $0 }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .disabled(!available)
-        }
-    }
-
     var eventsPage: some View {
         GuardCard(title: L("card.events"), subtitle: L("events.sub")) {
             if store.events.isEmpty {
@@ -1773,186 +1113,572 @@ struct Dashboard: View {
 
     var cleanupPage: some View {
         VStack(spacing: 16) {
-            GuardCard(title: L("card.cleanup"), subtitle: text("先检测，再勾选需要清理的项目。", "Scan, then select what to clean.")) {
-                Text(text("仅检查 Claude 的缓存和日志，保留对话、配置与登录信息。清理会移到废纸篓，可从中恢复。建议先退出 Claude。", "Checks only Claude caches and logs, preserving conversations, settings and sign-in data. Selected items move to Trash and can be restored. Quit Claude first."))
-                    .font(.callout).foregroundStyle(.secondary)
-                Button { store.refreshCleanup() } label: {
-                    Label(text("检测可清理项目", "Scan for cleanable items"), systemImage: "magnifyingglass")
-                }.routekeeperProminentButton().disabled(store.cleanupBusy).accessibilityIdentifier("cleanup-open")
-                if store.cleanupBusy { ProgressView().controlSize(.small) }
-                if !store.cleanupResult.isEmpty { Text(store.cleanupResult).font(.callout).textSelection(.enabled) }
+            cleanupSummaryCard
+
+            if store.cleanupPlan == nil {
+                cleanupScopePreviewCard
+            } else {
+                cleanupSelectionCard
+                cleanupLocalDataCard
             }
-            GuardCard(title: L("card.scope"), subtitle: text("仅显示本次检测发现的缓存和日志；勾选后才会清理。", "Only detected caches and logs appear here. Only selected items are cleaned.")) {
-                if store.cleanupPlan == nil {
-                    Text(text("点击上方检测，查看可清理项目。", "Scan above to see cleanable items.")).foregroundStyle(.secondary)
-                } else if store.cleanupCandidates.isEmpty {
-                    Label(text("未发现可清理的缓存或日志", "No caches or logs to clean"), systemImage: "checkmark.circle").foregroundStyle(.secondary)
-                } else {
-                    ForEach(store.cleanupCandidates) { target in
-                        HStack(alignment: .top, spacing: 12) {
-                            Toggle("", isOn: Binding(get: { store.cleanupSelection.contains(target.id) }, set: {
-                                if $0 { store.cleanupSelection.insert(target.id) } else { store.cleanupSelection.remove(target.id) }
-                            })).toggleStyle(.checkbox).labelsHidden().accessibilityLabel(target.label)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(target.label).font(.callout.weight(.medium))
-                                Text(abbreviateHome(target.path)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-                                Text(target.kind).font(.caption).foregroundStyle(.secondary)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                            Text(ByteCountFormatter.string(fromByteCount: target.sizeBytes, countStyle: .file))
-                                .font(.callout.monospacedDigit()).frame(width: 90, alignment: .trailing)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                        Divider()
-                    }
-                    HStack {
-                        Text(text("已选 \(store.selectedCleanupTargets.count) 项", "\(store.selectedCleanupTargets.count) selected")).font(.callout)
-                        Spacer()
-                        Button(text("将所选项目移到废纸篓", "Move selected items to Trash")) { store.runCleanup() }
-                            .routekeeperProminentButton().tint(.orange)
-                            .disabled(store.selectedCleanupTargets.isEmpty || store.cleanupBusy)
-                            .accessibilityIdentifier("cleanup-confirm-run")
-                    }
-                }
-            }.disabled(store.cleanupBusy)
+            cleanupPolicyCard
         }
-    }
-
-    var localDataPage: some View {
-        VStack(spacing: 16) {
-            GuardCard(
-                title: text("清空本地信息", "Clear local data"),
-                subtitle: text("把 Routekeeper 恢复成刚安装后的状态，不影响 Claude 和代理客户端。",
-                               "Return Routekeeper to a fresh-install state without changing Claude or your proxy client.")
-            ) {
-                localDataScopeRow(
-                    symbol: "gearshape",
-                    title: text("设置与检查记录", "Settings and check records"),
-                    detail: text("保护范围、固定出口、运行记录、出口报告、网关验证和抓包结果。",
-                                 "Protection scope, fixed exits, run log, egress reports, gateway evidence and capture results.")
-                )
-                localDataScopeRow(
-                    symbol: "key",
-                    title: text("登录凭证", "Sign-in credential"),
-                    detail: text("删除 Routekeeper 保存在 macOS 钥匙串里的 Claude Code 登录凭证。",
-                                 "Delete the Claude Code credential Routekeeper saved in your macOS Keychain.")
-                )
-                localDataScopeRow(
-                    symbol: "lock.shield",
-                    title: text("沙箱与系统过滤", "Sandbox and system filter"),
-                    detail: text("结束正在使用的沙箱，删除 Routekeeper 自己创建的会话副本，并关闭已启用的网络过滤。",
-                                 "End an active sandbox, delete session copies created by Routekeeper and turn off an enabled network filter.")
-                )
-
-                if store.checking || store.sandbox.busy || store.capture.busy
-                    || store.networkFilter.busy || store.gatewayVerification.busy || store.egressAudit.busy {
-                    Label(
-                        text("当前有操作正在运行。请等它结束再清空。",
-                             "An operation is still running. Wait for it to finish before clearing."),
-                        systemImage: "hourglass"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                }
-
-                HStack {
-                    Button(role: .destructive) {
-                        confirmClearLocalData = true
-                    } label: {
-                        Label(
-                            store.clearingLocalData
-                                ? text("正在清空…", "Clearing…")
-                                : text("清空本地信息…", "Clear local data…"),
-                            systemImage: "trash"
-                        )
-                    }
-                    .routekeeperProminentButton()
-                    .tint(.red)
-                    .disabled(
-                        store.clearingLocalData || store.checking || store.sandbox.busy
-                            || store.capture.busy || store.networkFilter.busy
-                            || store.gatewayVerification.busy || store.egressAudit.busy
-                    )
-                    .accessibilityIdentifier("local-data-clear")
-
-                    if store.clearingLocalData {
-                        ProgressView().controlSize(.small)
-                    }
-                    Spacer()
-                }
-
-                if !localDataResetNotice.isEmpty {
-                    Label(
-                        localDataResetNotice,
-                        systemImage: localDataResetNotice.contains(text("未能", "could not"))
-                            ? "exclamationmark.circle"
-                            : "checkmark.circle.fill"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(
-                        localDataResetNotice.contains(text("未能", "could not"))
-                            ? Color.orange
-                            : Color.green
-                    )
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("local-data-result")
-                }
-            }
-
-            GuardCard(
-                title: text("不会删除", "Kept on this Mac"),
-                subtitle: text("以下内容仍归你或其他应用管理。",
-                               "These items remain managed by you or their own applications.")
-            ) {
-                Text(text(
-                    "Routekeeper 应用本体、你主动导出的报告文件、Claude 项目与对话、Claude 和代理客户端的设置、系统代理配置，以及钥匙串中的其他项目都不会被删除。",
-                    "The Routekeeper app, reports you exported, Claude projects and conversations, Claude and proxy-client settings, system proxy configuration, and other Keychain items are not deleted."
-                ))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .confirmationDialog(
-            text("清空 Routekeeper 的本地信息？", "Clear Routekeeper local data?"),
-            isPresented: $confirmClearLocalData
+        .alert(
+            text("把本地信息加入清理？", "Include local data in cleanup?"),
+            isPresented: $confirmLocalDataInCleanup
         ) {
-            Button(text("清空本地信息", "Clear local data"), role: .destructive) {
-                clearLocalInformation()
+            Button(text("取消", "Cancel"), role: .cancel) {
+                store.cleanupIncludesLocalData = false
             }
-            Button(text("取消", "Cancel"), role: .cancel) {}
+            Button(text("加入清理", "Include"), role: .destructive) {
+                store.cleanupIncludesLocalData = true
+            }
         } message: {
             Text(text(
-                "这会停止监控、结束沙箱、关闭已启用的网络过滤，并删除设置、检查记录、登录凭证和 Routekeeper 创建的沙箱副本。此操作无法撤销。",
-                "This stops monitoring, ends the sandbox, turns off an enabled network filter, and deletes settings, check records, the saved credential and sandbox copies created by Routekeeper. This cannot be undone."
+                "本地信息包括 Routekeeper 设置、运行记录、报告、登录凭证、沙箱副本和系统过滤配置。它与普通缓存不同，无法从废纸篓恢复。",
+                "Local data includes Routekeeper settings, run history, reports, the saved credential, sandbox copies and system-filter configuration. Unlike regular caches, it cannot be restored from Trash."
             ))
+        }
+        .onChange(of: store.cleanupPlanRevision) {
+            guard let targets = store.cleanupPlan?.targets else { return }
+            let groups = CleanupScope.allCases.compactMap { scope -> (String, Int64)? in
+                let bytes = targets
+                    .filter { $0.scope == scope && $0.exists && $0.fileCount > 0 && $0.isSelectable }
+                    .reduce(Int64(0)) { $0 + $1.sizeBytes }
+                return bytes > 0 ? (scope.rawValue, bytes) : nil
+            }
+            expandedCleanupGroups = groups.max(by: { $0.1 < $1.1 }).map { [$0.0] } ?? []
         }
     }
 
-    private func localDataScopeRow(symbol: String, title: String, detail: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
+    private var cleanupSummaryCard: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 16) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        .fill(appAccent.opacity(0.09))
+                    Image(systemName: cleanupSummarySymbol)
+                        .font(.system(size: 25, weight: .light))
+                        .foregroundStyle(appAccent)
+                }
+                .frame(width: 58, height: 58)
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(cleanupSummaryTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if store.cleanupPlan == nil {
+                        Text(store.cleanupBusy
+                             ? text("正在统计可清理空间", "Calculating cleanable space")
+                             : text("扫描后显示可清理空间", "Cleanable space appears after scanning"))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(cleanupAvailableSize)
+                                .font(.system(size: 32, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text(text("可清理", "cleanable"))
+                                .font(.title3.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if store.cleanupPlan != nil {
+                        HStack(spacing: 12) {
+                            Label(cleanupSelectedSummary, systemImage: "checkmark.circle")
+                            if (store.cleanupPlan?.blockedCount ?? 0) > 0 {
+                                Label(
+                                    text(
+                                        "\(store.cleanupPlan?.blockedCount ?? 0) 项受保护",
+                                        "\(store.cleanupPlan?.blockedCount ?? 0) protected"
+                                    ),
+                                    systemImage: "lock.fill"
+                                )
+                                .foregroundStyle(.orange)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 12) {
+                    if store.cleanupBusy {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                    }
+                    if store.cleanupPlan != nil {
+                        Button(text("重新扫描", "Scan again")) {
+                            store.refreshCleanup()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                        .disabled(store.cleanupBusy)
+                    }
+                    Button {
+                        if store.cleanupPlan == nil {
+                            store.refreshCleanup()
+                        } else {
+                            store.runCleanup()
+                        }
+                    } label: {
+                        Label(cleanupPrimaryTitle, systemImage: cleanupPrimarySymbol)
+                    }
+                    .routekeeperProminentButton()
+                    .tint(store.cleanupIncludesLocalData ? .red : appAccent)
+                    .disabled(!cleanupPrimaryEnabled)
+                    .accessibilityIdentifier(
+                        store.cleanupPlan == nil ? "cleanup-open" : "cleanup-confirm-run"
+                    )
+                }
+            }
+
+            if store.cleanupPlan != nil {
+                AppHairline()
+                HStack(spacing: 12) {
+                    Button(text("全选可清理", "Select cleanable")) {
+                        store.selectAllCleanupTargets()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    Button(text("清除", "Clear")) {
+                        store.cleanupSelection.removeAll()
+                        store.cleanupIncludesLocalData = false
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    Spacer()
+                }
+            }
+
+            if !store.cleanupResult.isEmpty {
+                Label(store.cleanupResult, systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(20)
+        .cardSurface(corner: 22)
+    }
+
+    private var cleanupScopePreviewCard: some View {
+        GuardCard(
+            title: text("扫描范围", "Scan scope")
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(
+                    text("Claude Desktop 与 Claude Code 的可再生成缓存、临时文件和运行日志",
+                         "Regenerable caches, temporary files and runtime logs from Claude Desktop and Claude Code"),
+                    systemImage: "macwindow"
+                )
+                Label(
+                    text("Claude Science 与 Routekeeper 沙箱中的缓存、日志和临时副本",
+                         "Caches, logs and temporary copies from Claude Science and Routekeeper sandboxes"),
+                    systemImage: "shippingbox"
+                )
+                Label(
+                    text("带 Routekeeper 归属标记的会话和持久登录 profile 临时数据",
+                         "Session and persistent-profile temporary data carrying a Routekeeper ownership marker"),
+                    systemImage: "checkmark.seal"
+                )
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var cleanupPolicyCard: some View {
+        Label(
+            text(
+                "普通清理只处理白名单内的可再生成缓存、临时文件和日志；不会处理对话、项目、Cookie、账户或设备标识。",
+                "Regular cleanup only handles allowlisted regenerable caches, temporary files and logs. Conversations, projects, cookies, accounts and device identifiers are excluded."
+            ),
+            systemImage: "checkmark.shield"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 4)
+    }
+
+    private var cleanupSelectionCard: some View {
+        GuardCard(
+            title: text("清理范围", "Cleanup scope"),
+            subtitle: text("按来源分组；安全缓存默认选中，可展开逐项调整。",
+                           "Grouped by source; safe caches are selected by default and can be adjusted individually.")
+        ) {
+            if store.cleanupCandidates.isEmpty {
+                Label(
+                    text("没有发现可清理的缓存或日志", "No cleanable caches or logs found"),
+                    systemImage: "checkmark.circle"
+                )
                 .foregroundStyle(.secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.callout.weight(.semibold))
-                Text(detail)
+            } else {
+                ForEach(cleanupGroupScopes, id: \.rawValue) { scope in
+                    cleanupGroupView(scope)
+                }
+
+                if !(store.cleanupPlan?.warnings.isEmpty ?? true) {
+                    Label(
+                        text(
+                            "部分目录因归属标记、符号链接或进程状态被保护，未参与清理。",
+                            "Some directories were protected because of ownership, symbolic links or process state."
+                        ),
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .disabled(store.cleanupBusy)
+    }
+
+    private var cleanupLocalDataCard: some View {
+        GuardCard(
+            title: text("Routekeeper 本地信息", "Routekeeper local data"),
+            subtitle: text("默认不选择。", "Off by default.")
+        ) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(store.cleanupIncludesLocalData ? Color.orange : Color.secondary)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        (store.cleanupIncludesLocalData ? Color.orange : Color.secondary).opacity(0.09),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(text("清除设置、记录、凭证与沙箱副本",
+                              "Clear settings, history, credentials and sandbox copies"))
+                        .font(.callout.weight(.medium))
+                    Text(text(
+                        "不可恢复，也不会进入废纸篓。",
+                        "This cannot be undone or restored from Trash."
+                    ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: Binding(
+                    get: { store.cleanupIncludesLocalData },
+                    set: { selected in
+                        if selected {
+                            confirmLocalDataInCleanup = true
+                        } else {
+                            store.cleanupIncludesLocalData = false
+                        }
+                    }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .accessibilityLabel(text("清空 Routekeeper 本地信息", "Clear Routekeeper local data"))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 3)
+        .disabled(store.cleanupBusy)
     }
 
-    private func clearLocalInformation() {
-        localDataResetNotice = ""
-        Task {
-            let cleared = await store.clearLocalInformation()
-            if cleared {
-                appearanceRaw = AppAppearance.system.rawValue
+    private func cleanupGroupView(_ scope: CleanupScope) -> some View {
+        let targets = cleanupTargets(for: scope)
+        let selectable = targets.filter(\.isSelectable)
+        let selectedCount = selectable.filter { store.cleanupSelection.contains($0.id) }.count
+        let selectedBytes = selectable
+            .filter { store.cleanupSelection.contains($0.id) }
+            .reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let totalBytes = targets.reduce(Int64(0)) { $0 + $1.sizeBytes }
+
+        return DisclosureGroup(isExpanded: cleanupGroupExpandedBinding(scope.rawValue)) {
+            VStack(spacing: 0) {
+                HStack {
+                    Toggle(
+                        text("全选本组", "Select group"),
+                        isOn: cleanupGroupSelectionBinding(targets)
+                    )
+                    .toggleStyle(.checkbox)
+                    .font(.caption.weight(.medium))
+                    .disabled(selectable.isEmpty)
+                    Spacer()
+                    Text(text(
+                        "\(selectedCount)/\(selectable.count) 项已选",
+                        "\(selectedCount)/\(selectable.count) selected"
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 7)
+
+                ForEach(targets) { target in
+                    cleanupTargetRow(target)
+                    if target.id != targets.last?.id { Divider() }
+                }
             }
-            localDataResetNotice = store.notice
+            .padding(.leading, 4)
+        } label: {
+            HStack(spacing: 11) {
+                Image(systemName: cleanupScopeSymbol(scope))
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(appAccent)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        appAccent.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cleanupScopeTitle(scope))
+                        .font(.callout.weight(.semibold))
+                    Text(text(
+                        "\(selectable.count) 项可清理",
+                        "\(selectable.count) cleanable"
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(text(
+                        "共 \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))",
+                        "\(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)) total"
+                    ))
+                    .font(.caption.monospacedDigit())
+                    Text(selectedBytes > 0
+                         ? text(
+                            "已选 \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file))",
+                            "\(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file)) selected"
+                         )
+                         : text("未选择", "Nothing selected"))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(selectedBytes > 0 ? appAccent : Color.secondary)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func cleanupGroupExpandedBinding(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedCleanupGroups.contains(key) },
+            set: { expanded in
+                if expanded {
+                    expandedCleanupGroups.insert(key)
+                } else {
+                    expandedCleanupGroups.remove(key)
+                }
+            }
+        )
+    }
+
+    private func cleanupGroupSelectionBinding(_ targets: [CleanupTarget]) -> Binding<Bool> {
+        let selectableIDs = Set(targets.filter(\.isSelectable).map(\.id))
+        return Binding(
+            get: {
+                !selectableIDs.isEmpty
+                    && selectableIDs.allSatisfy { store.cleanupSelection.contains($0) }
+            },
+            set: { selected in
+                var next = store.cleanupSelection
+                if selected {
+                    next.formUnion(selectableIDs)
+                } else {
+                    next.subtract(selectableIDs)
+                }
+                store.cleanupSelection = next
+            }
+        )
+    }
+
+    private var cleanupOperationsBusy: Bool {
+        store.checking || store.capture.busy || store.sandbox.busy
+            || store.networkFilter.busy || store.gatewayVerification.busy
+            || store.egressAudit.busy
+    }
+
+    private var cleanupCanRun: Bool {
+        guard !store.cleanupBusy else { return false }
+        guard !store.selectedCleanupTargets.isEmpty || store.cleanupIncludesLocalData else {
+            return false
+        }
+        if store.cleanupIncludesLocalData, cleanupOperationsBusy { return false }
+        return true
+    }
+
+    private var cleanupSummaryTitle: String {
+        if store.cleanupPlan == nil {
+            return text("清理缓存", "Cache cleanup")
+        }
+        if (store.cleanupPlan?.selectableCount ?? 0) == 0 {
+            return text("本次没有发现可清理缓存", "No cleanable caches found")
+        }
+        return text("发现可清理缓存", "Cleanable caches found")
+    }
+
+    private var cleanupSummarySymbol: String {
+        if store.cleanupBusy { return "arrow.triangle.2.circlepath" }
+        if store.cleanupPlan == nil { return "magnifyingglass" }
+        return (store.cleanupPlan?.selectableCount ?? 0) == 0 ? "checkmark.circle" : "sparkles"
+    }
+
+    private var cleanupAvailableSize: String {
+        guard let plan = store.cleanupPlan else { return "" }
+        return ByteCountFormatter.string(fromByteCount: plan.selectableBytes, countStyle: .file)
+    }
+
+    private var cleanupSelectedSummary: String {
+        let count = store.selectedCleanupTargets.count
+        let size = ByteCountFormatter.string(
+            fromByteCount: store.selectedCleanupBytes,
+            countStyle: .file
+        )
+        guard store.cleanupPlan != nil else { return "" }
+        if store.cleanupIncludesLocalData {
+            return count == 0
+                ? text("另含 Routekeeper 本地信息", "Routekeeper local data included")
+                : text("已选 \(count) 项 · \(size)，另含本地信息",
+                       "\(count) items · \(size), plus local data")
+        }
+        return count == 0
+            ? text("尚未选择清理项", "Nothing selected")
+            : text("已选 \(count) 项 · \(size)", "\(count) selected · \(size)")
+    }
+
+    private var cleanupPrimaryTitle: String {
+        if store.cleanupPlan == nil {
+            return store.cleanupBusy
+                ? text("正在扫描", "Scanning")
+                : text("扫描缓存", "Scan caches")
+        }
+        return cleanupActionTitle
+    }
+
+    private var cleanupPrimarySymbol: String {
+        if store.cleanupPlan == nil { return "magnifyingglass" }
+        return store.cleanupIncludesLocalData ? "exclamationmark.arrow.triangle.2.circlepath" : "trash"
+    }
+
+    private var cleanupPrimaryEnabled: Bool {
+        store.cleanupPlan == nil ? !store.cleanupBusy : cleanupCanRun
+    }
+
+    private var cleanupActionTitle: String {
+        store.cleanupIncludesLocalData
+            ? text("清理并重置本地信息", "Clean and reset local data")
+            : text("移到废纸篓", "Move to Trash")
+    }
+
+    private var cleanupGroupScopes: [CleanupScope] {
+        CleanupScope.allCases.filter { scope in
+            store.cleanupCandidates.contains { $0.scope == scope }
+        }
+    }
+
+    private func cleanupTargets(for scope: CleanupScope) -> [CleanupTarget] {
+        store.cleanupCandidates.filter { $0.scope == scope }
+    }
+
+    private func cleanupScopeTitle(_ scope: CleanupScope) -> String {
+        switch scope {
+        case .hostDesktop: return text("宿主 Claude Desktop", "Host Claude Desktop")
+        case .hostCode: return text("宿主 Claude Code", "Host Claude Code")
+        case .hostScience: return text("宿主 Claude Science", "Host Claude Science")
+        case .currentSession: return text("当前 Routekeeper 沙箱", "Current Routekeeper sandbox")
+        case .pastSession: return text("历史 Routekeeper 沙箱", "Past Routekeeper sandboxes")
+        case .persistentProfile: return text("持久登录 sandbox profile", "Persistent sign-in sandbox profile")
+        }
+    }
+
+    private func cleanupScopeSymbol(_ scope: CleanupScope) -> String {
+        switch scope {
+        case .hostDesktop: return "macwindow"
+        case .hostCode: return "terminal"
+        case .hostScience: return "atom"
+        case .currentSession: return "shippingbox.fill"
+        case .pastSession: return "archivebox"
+        case .persistentProfile: return "person.crop.circle.badge.checkmark"
+        }
+    }
+
+    @ViewBuilder
+    private func cleanupTargetRow(_ target: CleanupTarget) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Toggle("", isOn: Binding(get: {
+                store.cleanupSelection.contains(target.id) && target.isSelectable
+            }, set: {
+                if $0 && target.isSelectable {
+                    store.cleanupSelection.insert(target.id)
+                } else {
+                    store.cleanupSelection.remove(target.id)
+                }
+            }))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .disabled(!target.isSelectable)
+            .accessibilityLabel(target.label(english: L10n.resolvedEnglish))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(target.label(english: L10n.resolvedEnglish))
+                    .font(.callout.weight(.medium))
+                Text(target.kind(english: L10n.resolvedEnglish))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(abbreviateHome(target.path))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(target.path)
+                if let reason = target.blockedReason {
+                    Label(cleanupBlockedReason(reason), systemImage: "lock.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(ByteCountFormatter.string(fromByteCount: target.sizeBytes, countStyle: .file))
+                    .font(.callout.monospacedDigit())
+                Text(target.blockedReason == nil
+                     ? (store.cleanupSelection.contains(target.id)
+                        ? text("已选择", "Selected")
+                        : text("可清理", "Cleanable"))
+                     : text("受保护", "Protected"))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(
+                        target.blockedReason != nil
+                            ? Color.orange
+                            : store.cleanupSelection.contains(target.id) ? appAccent : Color.secondary
+                    )
+            }
+            .frame(width: 96, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+        .opacity(target.isSelectable ? 1 : 0.72)
+    }
+
+    private func cleanupBlockedReason(_ reason: CleanupBlockReason) -> String {
+        switch reason {
+        case .symbolicLink:
+            return text("目标是指向其他位置的符号链接，已锁定。", "Target is a symbolic link and is locked.")
+        case .processRunning:
+            return text("对应 Claude 进程仍在运行，退出后重新检测。", "The matching Claude process is running; quit it and rescan.")
+        case .sessionRunning:
+            return text("该沙箱会话仍在运行，结束后再清理。", "This sandbox session is running; clean after it ends.")
+        case .profileInUse:
+            return text("持久登录 profile 正被运行中的沙箱使用。", "The persistent sign-in profile is in use by a running sandbox.")
+        case .processInspectionUnavailable:
+            return text("无法核验进程状态，已按失败关闭策略锁定。", "Process state cannot be inspected, so the target is locked fail-closed.")
         }
     }
 
@@ -1977,26 +1703,28 @@ struct Dashboard: View {
                 }
             }.pickerStyle(.menu).frame(maxWidth: 260)
             Divider().padding(.vertical, 4)
-            Text(text("关闭窗口后，应用会继续在后台运行。点击顶部菜单栏图标可重新打开面板；要完全退出，请在菜单中选择“退出”。",
-                      "Closing the window keeps the app running in the menu bar. Open the panel from there, or choose Quit to exit completely."))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Toggle(text("自动出口体检", "Automatic egress checks"),
-                   isOn: $store.automaticEgressAuditEnabled)
-                .toggleStyle(.switch)
-            Picker(text("自动体检间隔", "Automatic-check interval"),
-                   selection: $store.automaticEgressAuditIntervalMinutes) {
-                Text(text("每 15 分钟", "Every 15 minutes")).tag(15)
-                Text(text("每 30 分钟", "Every 30 minutes")).tag(30)
-                Text(text("每 60 分钟", "Every 60 minutes")).tag(60)
+            if store.settings.experimentalSandboxEnabled {
+                Label(
+                    text("沙箱运行中，无法进行设置。请先结束并关闭沙箱。",
+                         "Sandbox is active. End and close it before changing settings."),
+                    systemImage: "lock.shield"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+                Toggle(text("自动出口体检", "Automatic egress checks"),
+                       isOn: $store.automaticEgressAuditEnabled)
+                    .toggleStyle(.switch)
+                Picker(text("自动体检间隔", "Automatic-check interval"),
+                       selection: $store.automaticEgressAuditIntervalMinutes) {
+                    Text(text("每 15 分钟", "Every 15 minutes")).tag(15)
+                    Text(text("每 30 分钟", "Every 30 minutes")).tag(30)
+                    Text(text("每 60 分钟", "Every 60 minutes")).tag(60)
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 260)
+                .disabled(!store.automaticEgressAuditEnabled)
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 260)
-            .disabled(!store.automaticEgressAuditEnabled)
-            Text(text("自动体检会在 App 启动、网络变化及所选间隔到达时运行。为保护隐私，自动体检不会查询第三方 IP 信息；网络变化触发的体检会在自检恢复后执行。",
-                      "Automatic checks run after launch, after network changes and at the selected interval. To protect privacy, they never query third-party intelligence. Network-change checks run after self-check recovery."))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -2114,6 +1842,34 @@ private struct SidebarToggleButton: View {
     }
 }
 
+private struct PageHeaderBreadcrumb: View {
+    let pageTitle: String
+    let sectionTitle: String?
+    let onOpenRoot: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            if let sectionTitle {
+                Button(action: onOpenRoot) {
+                    Text(pageTitle)
+                        .foregroundStyle(Color.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(L10n.resolvedEnglish ? "Back to \(pageTitle)" : "返回\(pageTitle)")
+                .accessibilityLabel(L10n.resolvedEnglish ? "Back to \(pageTitle)" : "返回\(pageTitle)")
+                .accessibilityIdentifier("page-header-root")
+                Text("/")
+                    .foregroundStyle(.tertiary)
+                Text(sectionTitle)
+                    .foregroundStyle(.primary)
+            } else {
+                Text(pageTitle)
+            }
+        }
+    }
+}
+
 private struct HeaderIconButtonStyle: ButtonStyle {
     let hovering: Bool
 
@@ -2194,74 +1950,28 @@ struct GlassButtonStyle: ButtonStyle {
     }
 }
 
-private enum HomeSetupAction {
-    case inspection
-    case gatewayCheck
-    case startMonitoring
-
-    var title: String {
-        let en = L10n.resolvedEnglish
-        switch self {
-        case .inspection: return en ? "Open network check" : "打开网络体检"
-        case .gatewayCheck: return en ? "Finish gateway check" : "完成网关检查"
-        case .startMonitoring: return en ? "Start monitoring" : "开启监控"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .inspection: return "waveform.path.ecg.rectangle"
-        case .gatewayCheck: return "point.3.connected.trianglepath.dotted"
-        case .startMonitoring: return "shield.fill"
-        }
-    }
-
-    var color: Color {
-        self == .gatewayCheck ? .orange : appAccent
-    }
-}
-
-private enum HomeSetupStepState {
-    case complete
-    case current
-    case pending
-    case attention
-
-    var color: Color {
-        switch self {
-        case .complete: return appAccent
-        case .current: return .primary
-        case .pending: return .secondary
-        case .attention: return .orange
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .complete: return "checkmark"
-        case .current: return "arrow.right"
-        case .pending: return "circle"
-        case .attention: return "exclamationmark"
-        }
-    }
-}
-
-private struct HomeSetupStepItem: Identifiable {
-    let id: Int
-    let title: String
-    let detail: String
-    let state: HomeSetupStepState
-}
-
 struct GuardCard<Content: View>: View {
     let title: String
     let subtitle: String
     @ViewBuilder var content: Content
+
+    init(
+        title: String,
+        subtitle: String = "",
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.system(size: 15.5, weight: .semibold)).tracking(-0.15)
-                Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                }
             }.padding(.bottom, 3)
             content
         }

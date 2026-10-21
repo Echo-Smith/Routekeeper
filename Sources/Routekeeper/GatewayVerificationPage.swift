@@ -4,7 +4,7 @@ import SwiftUI
 struct GatewayVerificationPage: View {
     @Bindable var controller: GatewayVerificationController
     let mode: GatewayProtectionMode
-    let onOpenAdvancedNetwork: () -> Void
+    let onChangeMode: () -> Void
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -102,11 +102,11 @@ struct GatewayVerificationPage: View {
                     .font(.callout.weight(.semibold))
             }
             Spacer()
-            Button(text("更改方式", "Change mode"), action: onOpenAdvancedNetwork)
+            Button(text("更改方式", "Change mode"), action: onChangeMode)
                 .buttonStyle(.plain)
                 .font(.callout.weight(.medium))
                 .foregroundStyle(appAccent)
-                .accessibilityIdentifier("gateway-open-advanced-network")
+                .accessibilityIdentifier("gateway-change-mode")
         }
         .padding(12)
         .background(
@@ -222,7 +222,7 @@ struct GatewayVerificationPage: View {
                 Button(text("重新检查", "Verify again")) {
                     Task { await controller.runBaseline(for: mode) }
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
                 .disabled(controller.busy)
             }
         }
@@ -289,7 +289,7 @@ struct GatewayVerificationPage: View {
         switch status {
         case .unverified:
             return mode == .off
-                ? text("先在高级网络保护中选择分流保护或仅限制 Claude。", "Choose split routing or Claude-only restriction first.")
+                ? text("先在检查设置中选择分流保护或仅限制 Claude。", "Choose split routing or Claude-only restriction in Check settings first.")
                 : text("依次检查当前路径、节点断开和代理退出，不能只凭一次成功请求下结论。",
                        "Check the current path, node failure and client exit in order. One successful request is not enough.")
         case .needsNodeFailureTest:

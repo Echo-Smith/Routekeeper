@@ -8,9 +8,9 @@ extension CheckItem {
         let en = L10n.resolvedEnglish
         switch id {
         case "target", "alternate-target", "stack-ipv4", "stack-ipv6":
-            return en ? "Next: set the expected fixed exit IP in Protection settings, then check again." : "下一步：在保护设置中填写对应的固定出口 IP，再重新检查。"
+            return en ? "Next: set the expected fixed exit IP in Protection > Network protection, then check again." : "下一步：在“保护 > 网络保护”中填写对应的固定出口 IP，再重新检查。"
         case "scope", "desktop", "code":
-            return en ? "Next: install the selected Claude app, or deselect it in Protection settings." : "下一步：安装所选 Claude 应用，或在保护设置中取消保护未安装的应用。"
+            return en ? "Next: install the selected Claude app, or deselect it in Protection > Network protection." : "下一步：安装所选 Claude 应用，或在“保护 > 网络保护”中取消保护未安装的应用。"
         case "interval":
             return en ? "Next: set the check interval to 1–300 seconds." : "下一步：将检查间隔设置为 1–300 秒。"
         case "dns":

@@ -10,10 +10,16 @@ extension Notification.Name {
 enum AppNavigationRequest {
     private static var pendingPage: GuardPage?
     private static var pendingProtectionSection: ProtectionSection?
+    private static var pendingSettingsSection: SettingsSection?
 
-    static func request(_ page: GuardPage, protectionSection: ProtectionSection? = nil) {
+    static func request(
+        _ page: GuardPage,
+        protectionSection: ProtectionSection? = nil,
+        settingsSection: SettingsSection? = nil
+    ) {
         pendingPage = page
         pendingProtectionSection = protectionSection
+        pendingSettingsSection = settingsSection
         NotificationCenter.default.post(name: .routekeeperShowChecks, object: nil)
     }
 
@@ -26,6 +32,12 @@ enum AppNavigationRequest {
         defer { pendingProtectionSection = nil }
         return pendingProtectionSection
     }
+
+    static func consumePendingSettingsSection() -> SettingsSection? {
+        defer { pendingSettingsSection = nil }
+        return pendingSettingsSection
+    }
+
 }
 
 @MainActor
@@ -62,7 +74,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = true
-            popover.contentSize = NSSize(width: 320, height: 244)
+            popover.contentSize = NSSize(width: 360, height: 450)
             popover.contentViewController = NSHostingController(
                 rootView: GuardMenu(store: store, appDelegate: self)
             )
@@ -152,14 +164,26 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showSandboxPanel() {
-        showPanel(page: .protection, protectionSection: .sandbox)
+        showPanel(page: .sandbox)
     }
 
-    private func showPanel(page: GuardPage, protectionSection: ProtectionSection? = nil) {
+    func showAboutPanel() {
+        showPanel(page: .settings, settingsSection: .about)
+    }
+
+    private func showPanel(
+        page: GuardPage,
+        protectionSection: ProtectionSection? = nil,
+        settingsSection: SettingsSection? = nil
+    ) {
         statusPopover?.performClose(nil)
         NSApp.setActivationPolicy(.regular)
         refreshDockIcon()
-        AppNavigationRequest.request(page, protectionSection: protectionSection)
+        AppNavigationRequest.request(
+            page,
+            protectionSection: protectionSection,
+            settingsSection: settingsSection
+        )
         NSApplication.shared.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -284,7 +308,7 @@ struct GuardApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button(L("menu.about")) { NSApplication.shared.orderFrontStandardAboutPanel(options: [:]) }
+                Button(L("menu.about")) { appDelegate.showAboutPanel() }
             }
             CommandGroup(replacing: .appTermination) {
                 Button(L("menu.quit")) { confirmQuit(store) }.keyboardShortcut("q")
@@ -304,7 +328,7 @@ func confirmQuit(_ store: GuardStore) {
             alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "结束沙箱并退出")
         } else {
             alert.messageText = "退出后将停止监控"
-            alert.informativeText = "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在高级网络保护或系统设置中关闭。"
+            alert.informativeText = "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在网络保护或系统设置中关闭。"
             alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "停止监控并退出")
         }
         guard alert.runModal() == .alertSecondButtonReturn else { return }
@@ -318,54 +342,380 @@ func confirmQuit(_ store: GuardStore) {
 struct GuardMenu: View {
     @Bindable var store: GuardStore
     let appDelegate: RoutekeeperAppDelegate
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(store.title)
-                .font(.headline)
-            if store.settings.experimentalSandboxEnabled {
-                Text(store.sandbox.message)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            summary
+            if let event = store.events.first, event.isAttention {
+                Label(event.message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(L10n.resolvedEnglish
-                     ? "Target: \(store.settings.targetIP.isEmpty ? "not set" : store.settings.targetIP)"
-                     : "目标：\(store.settings.targetIP.isEmpty ? "尚未设置" : store.settings.targetIP)")
+            }
+            AppHairline()
+            actionList
+            AppHairline()
+            Button {
+                confirmQuit(store)
+            } label: {
+                menuActionLabel(L("menu.quitShort"), systemImage: "power")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(15)
+        .frame(width: 360, alignment: .leading)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: store.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 34, height: 34)
+                .background(
+                    statusColor.opacity(0.11),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(store.title)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(statusDetail)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Divider()
-            Button(L("menu.openPanel")) {
+            Spacer(minLength: 0)
+            if store.policy.phase == .armed || store.sandbox.phase == .running {
+                Text(L10n.resolvedEnglish ? "Active" : "运行中")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(statusColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(statusColor.opacity(0.10), in: Capsule())
+            }
+        }
+    }
+
+    private var summary: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(summaryRows.enumerated()), id: \.offset) { index, row in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.055))
+                        .frame(height: 0.5)
+                        .padding(.leading, 8)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 62, alignment: .leading)
+                    Text(row.value)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(row.isAttention ? Color.orange : Color.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if row.isAttention {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.orange)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+            }
+        }
+        .background(
+            Color.primary.opacity(0.035),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+    }
+
+    private var actionList: some View {
+        VStack(spacing: 2) {
+            Button {
                 appDelegate.showChecksPanel()
+            } label: {
+                menuActionLabel(L("menu.openPanel"), systemImage: "rectangle.inset.filled")
             }
+            .buttonStyle(.plain)
+
             if store.settings.experimentalSandboxEnabled {
-                Button(L10n.resolvedEnglish ? "Open experimental sandbox" : "打开实验性进程沙箱") {
+                Button {
                     appDelegate.showSandboxPanel()
+                } label: {
+                    menuActionLabel(
+                        L10n.resolvedEnglish ? "Open sandbox" : "打开沙箱",
+                        systemImage: "lock.shield"
+                    )
                 }
+                .buttonStyle(.plain)
+
+                if store.sandbox.externalActions.pendingCount > 0 {
+                    Button {
+                        appDelegate.showSandboxPanel()
+                    } label: {
+                        menuActionLabel(
+                            L10n.resolvedEnglish
+                                ? "Review \(store.sandbox.externalActions.pendingCount) handoff request(s)"
+                                : "审核 \(store.sandbox.externalActions.pendingCount) 个外部操作",
+                            systemImage: "person.badge.key"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 if store.sandbox.phase == .running {
-                    Button(L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络") {
+                    Button {
                         store.pauseSandboxNetwork()
+                    } label: {
+                        menuActionLabel(
+                            L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络",
+                            systemImage: "wifi.slash"
+                        )
                     }
+                    .buttonStyle(.plain)
                 } else if store.sandbox.phase == .networkPaused {
-                    Button(L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络") {
+                    Button {
                         Task { await store.resumeSandboxNetwork() }
+                    } label: {
+                        menuActionLabel(
+                            L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络",
+                            systemImage: "wifi"
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
+
                 if store.sandbox.phase.isActive {
-                    Button(L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话") {
+                    Button {
                         Task { await store.endSandboxSession() }
+                    } label: {
+                        menuActionLabel(
+                            L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话",
+                            systemImage: "stop.circle"
+                        )
                     }
+                    .buttonStyle(.plain)
                 }
             } else if store.monitoring {
-                Button(L("menu.stopMonitor")) { store.stop() }
+                Button {
+                    store.stop()
+                } label: {
+                    menuActionLabel(L("menu.stopMonitor"), systemImage: "pause.circle")
+                }
+                .buttonStyle(.plain)
             } else {
-                Button(L("menu.runCheck")) { Task { await store.check() } }.disabled(store.checking)
+                Button {
+                    Task { await store.check() }
+                } label: {
+                    menuActionLabel(L("menu.runCheck"), systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .disabled(store.checking)
             }
-            Divider()
-            Button(L("menu.quitShort")) { confirmQuit(store) }
         }
-        .buttonStyle(.plain)
-        .padding(14)
-        .frame(width: 320, alignment: .leading)
     }
+
+    private func menuActionLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.callout)
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+    }
+
+    private var statusColor: Color {
+        if store.policy.phase == .incident || store.sandbox.phase == .failed {
+            return .orange
+        }
+        if store.sandbox.phase == .networkPaused || store.sandbox.phase == .preparing
+            || store.sandbox.phase == .checking {
+            return .orange
+        }
+        if store.policy.phase == .armed || store.sandbox.phase == .running {
+            return appAccent
+        }
+        return .secondary
+    }
+
+    private var statusDetail: String {
+        if store.settings.experimentalSandboxEnabled {
+            return store.sandbox.message
+        }
+        if store.monitoring {
+            return L10n.resolvedEnglish
+                ? "Monitoring the selected Claude processes."
+                : "正在监控所选 Claude 进程。"
+        }
+        if store.checking {
+            return L10n.resolvedEnglish ? "Network check in progress." : "正在运行网络体检。"
+        }
+        return store.notice
+    }
+
+    private var summaryRows: [MenuSummaryRow] {
+        if store.settings.experimentalSandboxEnabled {
+            return sandboxSummaryRows
+        }
+        return standardSummaryRows
+    }
+
+    private var sandboxSummaryRows: [MenuSummaryRow] {
+        let session = store.sandbox
+        let passed = session.checks.filter(\.passed).count
+        let checkValue: String
+        let checkAttention: Bool
+        if session.checks.isEmpty {
+            checkValue = L10n.resolvedEnglish ? "Not verified" : "尚未验证"
+            checkAttention = session.phase == .failed
+        } else {
+            checkValue = L10n.resolvedEnglish
+                ? "\(passed)/\(session.checks.count) passed"
+                : "\(passed)/\(session.checks.count) 项通过"
+            checkAttention = passed != session.checks.count
+        }
+        return [
+            .init(
+                label: L10n.resolvedEnglish ? "Target" : "目标",
+                value: session.configuration.target.title
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Network" : "网络",
+                value: sandboxNetworkSummary,
+                isAttention: session.phase == .networkPaused
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Proxy" : "代理",
+                value: sandboxProxySummary
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Exit" : "出口",
+                value: sandboxExitSummary,
+                isAttention: !session.expectedExits.hasAny
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Approval" : "待授权",
+                value: session.externalActions.pendingCount == 0
+                    ? (L10n.resolvedEnglish ? "None" : "无")
+                    : (L10n.resolvedEnglish
+                        ? "\(session.externalActions.pendingCount) pending"
+                        : "\(session.externalActions.pendingCount) 项待确认"),
+                isAttention: session.externalActions.pendingCount > 0
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Checks" : "检查",
+                value: checkValue,
+                isAttention: checkAttention
+            )
+        ]
+    }
+
+    private var standardSummaryRows: [MenuSummaryRow] {
+        let selectedScopes = [
+            store.settings.protectDesktop ? (L10n.resolvedEnglish ? "Desktop" : "桌面版") : nil,
+            store.settings.protectCode ? (L10n.resolvedEnglish ? "Code" : "Code") : nil
+        ].compactMap { $0 }
+        let exit = store.settings.targetIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lastCheck: String
+        if let snapshot = store.snapshot {
+            lastCheck = snapshot.checkedAt.formatted(date: .omitted, time: .shortened)
+        } else {
+            lastCheck = L10n.resolvedEnglish ? "Not run" : "尚未运行"
+        }
+        let exitMatch: String
+        let exitMismatch: Bool
+        if let proxy = store.snapshot?.proxyIP, let tunnel = store.snapshot?.tunnelIP {
+            exitMatch = proxy == tunnel
+                ? (L10n.resolvedEnglish ? "Matched" : "一致")
+                : (L10n.resolvedEnglish ? "Mismatch" : "不一致")
+            exitMismatch = proxy != tunnel
+        } else {
+            exitMatch = L10n.resolvedEnglish ? "Unknown" : "未知"
+            exitMismatch = false
+        }
+        return [
+            .init(
+                label: L10n.resolvedEnglish ? "Exit" : "目标出口",
+                value: exit.isEmpty ? (L10n.resolvedEnglish ? "Not set" : "尚未设置") : exit,
+                isAttention: exit.isEmpty
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Last check" : "最近体检",
+                value: lastCheck
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Route" : "双路出口",
+                value: exitMatch,
+                isAttention: exitMismatch
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Scope" : "保护范围",
+                value: selectedScopes.isEmpty
+                    ? (L10n.resolvedEnglish ? "Not selected" : "尚未选择")
+                    : selectedScopes.joined(separator: " + "),
+                isAttention: selectedScopes.isEmpty
+            ),
+            .init(
+                label: L10n.resolvedEnglish ? "Monitor" : "监控",
+                value: store.monitoring
+                    ? (L10n.resolvedEnglish ? "On" : "已开启")
+                    : (L10n.resolvedEnglish ? "Off" : "已关闭")
+            )
+        ]
+    }
+
+    private var sandboxNetworkSummary: String {
+        let session = store.sandbox
+        if session.phase == .running, session.networkEnabled {
+            if let port = session.relayPort {
+                return L10n.resolvedEnglish ? "On · relay \(port)" : "已开启 · 中继 \(port)"
+            }
+            return L10n.resolvedEnglish ? "On" : "已开启"
+        }
+        if session.phase == .networkPaused {
+            return L10n.resolvedEnglish ? "Off" : "已关闭"
+        }
+        if session.phase == .preparing || session.phase == .checking {
+            return L10n.resolvedEnglish ? "Verifying" : "验证中"
+        }
+        return L10n.resolvedEnglish ? "Not started" : "尚未启动"
+    }
+
+    private var sandboxProxySummary: String {
+        guard let proxy = store.sandbox.detectedProxy else {
+            return L10n.resolvedEnglish ? "Not detected" : "尚未检测"
+        }
+        return "\(proxy.protocolType.title) · \(proxy.host):\(proxy.port)"
+    }
+
+    private var sandboxExitSummary: String {
+        let exits = store.sandbox.expectedExits
+        let values = [
+            exits.ipv4.map { "IPv4 \($0)" },
+            exits.ipv6.map { "IPv6 \($0)" }
+        ].compactMap { $0 }
+        return values.isEmpty
+            ? (L10n.resolvedEnglish ? "Not saved" : "尚未保存")
+            : values.joined(separator: " · ")
+    }
+}
+
+private struct MenuSummaryRow {
+    let label: String
+    let value: String
+    var isAttention = false
 }
 
 private struct WindowCommandBridge: NSViewRepresentable {

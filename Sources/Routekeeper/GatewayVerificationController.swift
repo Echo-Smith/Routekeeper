@@ -60,7 +60,7 @@ final class GatewayVerificationController {
         guard mode != .off else {
             message = L10n.resolvedEnglish
                 ? "Choose split routing or Claude-only restriction before verifying the gateway."
-                : "请先在高级网络保护中选择“分流保护”或“仅限制 Claude”，再检查代理网关。"
+                : "请先在网络体检的检查设置中选择“分流保护”或“仅限制 Claude”，再检查代理网关。"
             return
         }
         busy = true

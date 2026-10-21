@@ -15,59 +15,18 @@ struct NetworkProtectionPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            GuardCard(
-                title: text("选择保护方式", "Choose a protection mode"),
-                subtitle: text(
-                    "这里只记录你要采用的配置方式，实际规则仍由代理客户端执行。选择后必须完成节点断开和代理退出测试。",
-                    "This records the configuration you intend to use. The proxy client still applies the rules. Complete the node-failure and client-exit tests before Routekeeper treats it as verified."
-                )
-            ) {
-                Picker("", selection: $store.settings.gatewayProtectionMode) {
-                    ForEach(GatewayProtectionMode.allCases, id: \.self) { mode in
-                        Text(modeTitle(mode)).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 430)
+        VStack(alignment: .leading, spacing: 16) {
+            NetworkSettingsPage(store: store)
 
-                Text(modeExplanation)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if store.settings.gatewayProtectionMode != .off {
-                    HStack {
-                        Label(
-                            gatewayStatusText,
-                            systemImage: store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) == .verified
-                                ? "checkmark.shield.fill"
-                                : "shield.lefthalf.filled"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(
-                            store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) == .verified
-                                ? appAccent
-                                : Color.secondary
-                        )
-                        Spacer()
-                        Button(text("去网络体检", "Open network check")) {
-                            AppNavigationRequest.request(.inspection)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-            }
-
-            GuardCard(
-                title: text("让 Claude 只能走代理", "Keep Claude on the proxy"),
-                subtitle: text("可选。由代理客户端限制 Claude；节点不可用时断开连接，不回落直连。",
-                               "Optional. Let the proxy client keep Claude on the selected route and fail closed when the node is unavailable.")
-            ) {
+            if store.settings.gatewayProtectionMode == .claudeOnly {
+                GuardCard(
+                    title: text("让 Claude 只能走代理", "Keep Claude on the proxy"),
+                    subtitle: text("在代理客户端中限制 Claude 进程。",
+                                   "Restrict Claude processes in the proxy client.")
+                ) {
                 Text(text(
-                    "这项限制适合交给代理客户端完成。Routekeeper 不会直接读取或修改代理配置，下面的提示词会要求 Agent 先核对客户端能力、备份配置并询问要使用的海外节点。",
-                    "This is best handled by the proxy client. Routekeeper does not read or modify proxy settings directly. The prompt asks an agent to verify capabilities, back up the configuration and ask which overseas node to use."
+                    "复制提示词给能操作本机的 Agent，由它核对客户端并完成配置。",
+                    "Copy the prompt to a local agent to verify the client and apply the rules."
                 ))
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -87,7 +46,7 @@ struct NetworkProtectionPage: View {
                     .routekeeperProminentButton()
                     .accessibilityIdentifier("copy-claude-restriction-prompt")
 
-                    Text(text("复制后粘贴给能操作本机的 Agent。", "Paste it into an agent that can operate this Mac."))
+                    Text(text("复制给能操作本机的 Agent。", "Paste into a local agent."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -123,16 +82,18 @@ struct NetworkProtectionPage: View {
                     }
                     .padding(.top, 8)
                 }
+                }
             }
 
-            GuardCard(
-                title: text("分流保护", "Routing protection"),
-                subtitle: text("国内流量直连，其余流量固定走海外节点；节点断开时不回落直连。",
-                               "Send domestic traffic direct and everything else through the selected overseas node, with no direct fallback when the node disconnects.")
-            ) {
+            if store.settings.gatewayProtectionMode == .splitTraffic {
+                GuardCard(
+                    title: text("分流保护", "Routing protection"),
+                    subtitle: text("国内直连，其余流量走海外节点。",
+                                   "Domestic direct, other traffic through an overseas node.")
+                ) {
                 Text(text(
-                    "实际分流规则需要在代理客户端中修改。下面的提示词会先让 Agent 核对客户端、版本和内核能力，并询问要使用的海外节点；缺信息时不会猜测。",
-                    "Routing rules are changed in the proxy client. The prompt asks an agent to verify the client, version and core first, then ask which overseas node to use. Missing details are never guessed."
+                    "复制提示词给能操作本机的 Agent，由它备份并修改代理规则。",
+                    "Copy the prompt to a local agent to back up and update the routing rules."
                 ))
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -152,7 +113,7 @@ struct NetworkProtectionPage: View {
                     .routekeeperProminentButton()
                     .accessibilityIdentifier("copy-routing-agent-prompt")
 
-                    Text(text("复制后粘贴给能操作本机的 Agent。", "Paste it into an agent that can operate this Mac."))
+                    Text(text("复制给能操作本机的 Agent。", "Paste into a local agent."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -173,28 +134,19 @@ struct NetworkProtectionPage: View {
                     .padding(.top, 8)
                 }
 
-                Text(text(
-                    "分流保护不会自动修改代理配置，也不会擅自更换客户端或节点。",
-                    "Routing protection does not change proxy settings automatically and does not replace your client or nodes."
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             GuardCard(
                 title: text("排查连接是否被拦截", "Investigate blocked connections"),
-                subtitle: text("可选。记录短时间内的网络连接，方便对比断开代理前后的变化。",
-                               "Optional. Record network activity briefly to compare what changes when the proxy is disconnected.")
+                subtitle: text("短时记录连接，用于对比代理开启和关闭。",
+                               "Record connections briefly to compare proxy on and off.")
             ) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(text("自动识别当前网络路径", "Detect the current network route"))
                             .font(.callout.weight(.medium))
-                        Text(text(
-                            "\(store.capture.interface.isEmpty ? "正在识别" : store.capture.interface) → \(store.capture.destination)，记录 \(store.capture.seconds) 秒。开始后访问测试目标即可。",
-                            "\(store.capture.interface.isEmpty ? "Detecting" : store.capture.interface) → \(store.capture.destination) for \(store.capture.seconds) seconds. Visit the test destination after recording starts."
-                        ))
+                        Text("\(store.capture.interface.isEmpty ? text("正在识别", "Detecting") : store.capture.interface) → \(store.capture.destination) · \(store.capture.seconds) 秒")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -211,10 +163,7 @@ struct NetworkProtectionPage: View {
 
                 DisclosureGroup(text("需要修改测试地址或时长？", "Change the test address or duration")) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(text(
-                            "通常不需要修改。网卡会自动跟随目标地址的当前路由；切换代理后也会重新识别。",
-                            "Usually no changes are needed. The interface follows the current route to the destination and is refreshed after proxy changes."
-                        ))
+                        Text(text("通常无需修改。", "Usually no changes are needed."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         HStack {
@@ -233,8 +182,8 @@ struct NetworkProtectionPage: View {
                 }
 
                 Text(text(
-                    "记录需要管理员授权，最多保存 200 个数据包的包头摘要。没有记录到数据，不能证明拦截已经生效。",
-                    "Recording requires administrator approval and saves summaries of at most 200 packet headers. No recorded traffic does not prove that traffic is blocked."
+                    "需要管理员授权；最多保存 200 个数据包的包头摘要。",
+                    "Requires administrator approval; stores headers for at most 200 packets."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -294,46 +243,6 @@ struct NetworkProtectionPage: View {
 
     private var restrictionPrompt: String {
         RoutingProtection.restrictionPrompt(clientName: routingClientName)
-    }
-
-    private func modeTitle(_ mode: GatewayProtectionMode) -> String {
-        switch mode {
-        case .off: return text("关闭", "Off")
-        case .splitTraffic: return text("分流保护", "Split routing")
-        case .claudeOnly: return text("仅限制 Claude", "Claude only")
-        }
-    }
-
-    private var modeExplanation: String {
-        switch store.settings.gatewayProtectionMode {
-        case .off:
-            return text(
-                "仍可复制提示词，但不会把代理规则当作已启用保护。",
-                "You can still copy the prompts, but proxy rules are not treated as an active protection mode."
-            )
-        case .splitTraffic:
-            return text(
-                "适合让整台 Mac 使用 TUN：国内直连，其余流量走所选海外节点，节点不可用时失败关闭。",
-                "Intended for Mac-wide TUN routing: domestic traffic goes direct, everything else uses the selected overseas node, and node failure fails closed."
-            )
-        case .claudeOnly:
-            return text(
-                "只尝试按 Claude Desktop 与 Claude Code 进程限制网络。Routekeeper 只能验证系统路径，不能替你证明代理客户端正确识别了每个 Claude 子进程。",
-                "Tries to restrict only Claude Desktop and Claude Code processes. Routekeeper can verify the system path, but cannot prove that the proxy client identified every Claude child process."
-            )
-        }
-    }
-
-    private var gatewayStatusText: String {
-        switch store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) {
-        case .unverified: return text("尚未进行代理网关检查", "Gateway not checked")
-        case .needsNodeFailureTest: return text("待测节点断开", "Node-failure test pending")
-        case .needsClientExitTest: return text("待测代理退出", "Client-exit test pending")
-        case .needsRecovery: return text("待恢复代理并复测", "Restore proxy and finish")
-        case .verified: return text("当前网络会话已验证", "Verified for this network session")
-        case .failed: return text("验证未通过", "Verification failed")
-        case .expired: return text("证据已过期", "Evidence expired")
-        }
     }
 
     private func copyRestrictionPrompt() {

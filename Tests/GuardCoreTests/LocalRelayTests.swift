@@ -37,6 +37,28 @@ final class LocalRelayTests: XCTestCase {
         XCTAssertEqual(resumedPort, localPort)
     }
 
+    func testHTTPConnectTunnelSurvivesIdlePeriodLongerThanHandshakeTimeout() throws {
+        let upstream = try FakeHTTPConnectProxy()
+        defer { upstream.close() }
+        let relay = LocalRelay(handshakeTimeoutSeconds: 1)
+        let localPort = try relay.start(
+            upstream: IsolationUpstream(host: "127.0.0.1", port: upstream.port, protocolType: .httpConnect)
+        )
+        defer { relay.stop() }
+
+        let proxyURL = try XCTUnwrap(relay.proxyEnvironment()["HTTPS_PROXY"])
+        let authorization = try XCTUnwrap(BasicProxyCredentials(proxyURL: proxyURL)).header
+        let client = try connect(port: localPort)
+        defer { close(client) }
+        try send(client, Data(connectRequest(host: "example.com:443", authorization: authorization).utf8))
+        XCTAssertTrue(String(decoding: try readHeader(client), as: UTF8.self).hasPrefix("HTTP/1.1 200"))
+
+        Thread.sleep(forTimeInterval: 1.5)
+
+        try send(client, Data("ping".utf8))
+        XCTAssertEqual(try receiveExactly(client, count: 4), Data("ping".utf8))
+    }
+
     func testHTTPConnectRequiresSessionCredentialAndRejectsLocalTargets() throws {
         let upstream = try FakeHTTPConnectProxy()
         defer { upstream.close() }
@@ -98,6 +120,34 @@ final class LocalRelayTests: XCTestCase {
         XCTAssertEqual(response[0], 0x05, "Unexpected relay response: \(String(decoding: response, as: UTF8.self)), \(relay.snapshot())")
         XCTAssertEqual(response[1], 0x00)
         XCTAssertEqual(upstream.lastTarget, "example.com:443")
+        try send(client, Data("ping".utf8))
+        XCTAssertEqual(try receiveExactly(client, count: 4), Data("ping".utf8))
+    }
+
+    func testSOCKS5ClientWithoutAuthenticationUsesConfiguredUpstream() throws {
+        let upstream = try FakeSOCKS5Proxy()
+        defer { upstream.close() }
+        let relay = LocalRelay()
+        let port = try relay.start(
+            upstream: IsolationUpstream(host: "127.0.0.1", port: upstream.port, protocolType: .socks5)
+        )
+        defer { relay.stop() }
+        XCTAssertEqual(relay.socks5URL(), "socks5://127.0.0.1:\(port)")
+        let client = try connect(port: port)
+        defer { close(client) }
+
+        try send(client, Data([0x05, 0x01, 0x00]))
+        XCTAssertEqual(try receiveExactly(client, count: 2), Data([0x05, 0x00]))
+
+        let host = Array("claude.ai".utf8)
+        var request = Data([0x05, 0x01, 0x00, 0x03, UInt8(host.count)])
+        request.append(contentsOf: host)
+        request.append(contentsOf: [0x01, 0xbb])
+        try send(client, request)
+        let response = try receiveExactly(client, count: 10)
+        XCTAssertEqual(response[0], 0x05)
+        XCTAssertEqual(response[1], 0x00)
+        XCTAssertEqual(upstream.lastTarget, "claude.ai:443")
         try send(client, Data("ping".utf8))
         XCTAssertEqual(try receiveExactly(client, count: 4), Data("ping".utf8))
     }

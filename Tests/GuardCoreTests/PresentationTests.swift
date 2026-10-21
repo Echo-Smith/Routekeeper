@@ -50,21 +50,117 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(CheckItem("desktop", "", "", .warning).needsAttention)
     }
 
+    func testInspectionChecksCollapseIntoFourEvidenceGroups() {
+        let checks = [
+            CheckItem("target", "target", "", .passed),
+            CheckItem("target-ipv4", "target format", "", .passed),
+            CheckItem("scope", "scope", "", .passed),
+            CheckItem("proxy-client", "proxy client", "", .passed),
+            CheckItem("proxy", "proxy", "", .passed),
+            CheckItem("interval", "interval", "", .passed),
+            CheckItem("ipv4", "ipv4", "", .passed),
+            CheckItem("ipv6", "ipv6", "", .passed),
+            CheckItem("dns", "dns", "", .passed),
+            CheckItem("udp-ipv4", "udp4", "", .passed),
+            CheckItem("udp-ipv6", "udp6", "", .passed),
+            CheckItem("tun", "tun", "", .passed),
+            CheckItem("proxy-exit", "proxy exit", "", .passed),
+            CheckItem("tun-exit", "system exit", "", .passed),
+            CheckItem("ipinfo-exit", "ipinfo", "", .passed),
+            CheckItem("claude-trace-exit", "trace", "", .passed),
+            CheckItem("process-access", "process", "", .passed),
+            CheckItem("desktop", "desktop", "", .passed),
+            CheckItem("code", "code", "", .passed),
+            CheckItem("boundary", "boundary", "", .warning)
+        ]
+
+        let groups = InspectionCheckGrouping.groups(from: checks)
+
+        XCTAssertEqual(groups.map(\.kind), [.configuration, .localPath, .externalServices, .claudeEnvironment])
+        XCTAssertEqual(groups.map(\.checks.count), [6, 6, 4, 3])
+        XCTAssertFalse(groups.flatMap(\.checks).contains { $0.id == "boundary" })
+        XCTAssertTrue(groups.allSatisfy { $0.level == .passed })
+    }
+
+    func testInspectionGroupStatusUsesMostActionableEvidence() {
+        let groups = InspectionCheckGrouping.groups(from: [
+            CheckItem("target", "target", "", .warning),
+            CheckItem("dns", "dns", "", .unknown),
+            CheckItem("udp-ipv4", "udp", "", .failed),
+            CheckItem("desktop", "desktop", "", .warning),
+            CheckItem("custom-check", "custom", "", .passed)
+        ])
+
+        XCTAssertEqual(groups.first { $0.kind == .configuration }?.level, .notice)
+        XCTAssertEqual(groups.first { $0.kind == .localPath }?.level, .needsAttention)
+        XCTAssertEqual(groups.first { $0.kind == .claudeEnvironment }?.level, .notice)
+        XCTAssertEqual(groups.first { $0.kind == .additional }?.checks.map(\.id), ["custom-check"])
+    }
+
     @MainActor func testCleanupOnlySelectsDetectedNonemptyTargets() {
         let suite = "guard-presentation-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
         store.cleanupPlan = CleanupPlan(targets: [
-            CleanupTarget(path: "/test/cache", label: "cache", kind: "cache", sizeBytes: 10, fileCount: 1, exists: true),
-            CleanupTarget(path: "/test/empty", label: "empty", kind: "cache", exists: true),
-            CleanupTarget(path: "/test/missing", label: "missing", kind: "cache")
+            CleanupTarget(path: "/test/cache", labelZh: "cache", labelEn: "cache", kindZh: "cache", kindEn: "cache", scope: .hostCode, sizeBytes: 10, fileCount: 1, exists: true),
+            CleanupTarget(path: "/test/empty", labelZh: "empty", labelEn: "empty", kindZh: "cache", kindEn: "cache", scope: .hostCode, exists: true),
+            CleanupTarget(path: "/test/missing", labelZh: "missing", labelEn: "missing", kindZh: "cache", kindEn: "cache", scope: .hostCode)
         ])
         XCTAssertTrue(store.selectedCleanupTargets.isEmpty)
         store.cleanupSelection = ["/test/cache", "/test/empty", "/test/missing", "/unscanned"]
         XCTAssertEqual(store.selectedCleanupTargets.map(\.path), ["/test/cache"])
+        store.cleanupPlan?.targets[0].blockedReason = .processRunning
+        XCTAssertTrue(store.selectedCleanupTargets.isEmpty)
         store.cleanupSelection.remove("/test/cache")
         XCTAssertTrue(store.selectedCleanupTargets.isEmpty)
+    }
+
+    @MainActor func testApplyingCleanupPlanSelectsOnlySafeNonemptyTargets() {
+        let suite = "guard-cleanup-defaults-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
+        let previousRevision = store.cleanupPlanRevision
+        store.applyCleanupPlan(CleanupPlan(targets: [
+            CleanupTarget(
+                path: "/test/cache",
+                labelZh: "cache",
+                labelEn: "cache",
+                kindZh: "cache",
+                kindEn: "cache",
+                scope: .hostCode,
+                sizeBytes: 10,
+                fileCount: 1,
+                exists: true
+            ),
+            CleanupTarget(
+                path: "/test/empty",
+                labelZh: "empty",
+                labelEn: "empty",
+                kindZh: "cache",
+                kindEn: "cache",
+                scope: .hostCode,
+                exists: true
+            ),
+            CleanupTarget(
+                path: "/test/locked",
+                labelZh: "locked",
+                labelEn: "locked",
+                kindZh: "cache",
+                kindEn: "cache",
+                scope: .hostCode,
+                sizeBytes: 20,
+                fileCount: 1,
+                exists: true,
+                blockedReason: .processRunning
+            )
+        ]))
+
+        XCTAssertEqual(store.cleanupSelection, ["/test/cache"])
+        XCTAssertEqual(store.selectedCleanupTargets.map(\.path), ["/test/cache"])
+        XCTAssertFalse(store.cleanupIncludesLocalData)
+        XCTAssertEqual(store.cleanupPlanRevision, previousRevision + 1)
     }
 
     @MainActor func testAttentionEventsRetainTheirSeverity() {
@@ -76,6 +172,19 @@ final class PresentationTests: XCTestCase {
         store.log("incident", attention: true)
         XCTAssertTrue(store.events[0].isAttention)
         XCTAssertFalse(store.events[1].isAttention)
+    }
+
+    @MainActor func testDesktopInstalledUsesSignatureVerifiedDiscoveryBeforeAnySnapshot() throws {
+        guard let installation = ClaudeDesktopDiscovery.locate() else {
+            throw XCTSkip("No signature-verified official Claude Desktop app is installed.")
+        }
+        let suite = "guard-desktop-discovery-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
+        XCTAssertNil(store.snapshot)
+        XCTAssertTrue(store.desktopInstalled)
+        XCTAssertEqual(store.desktopInstallation?.appURL, installation.appURL)
     }
 
     @MainActor func testSandboxModeTakesStatusPriorityAndSkipsOrdinaryChecks() async {
@@ -123,15 +232,69 @@ final class PresentationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let session = SandboxSession(preferences: defaults)
 
+        session.configuration.target = .claudeDesktop
+        session.configuration.persistClaudeLogin = true
         session.configuration.upstream.username = "routekeeper"
         session.configuration.upstream.password = "do-not-persist"
 
         let data = try XCTUnwrap(defaults.data(forKey: "routekeeper-isolation-configuration-v1"))
         let persisted = try JSONDecoder().decode(IsolationConfiguration.self, from: data)
+        XCTAssertEqual(persisted.target, .claudeDesktop)
+        XCTAssertTrue(persisted.persistClaudeLogin)
         XCTAssertEqual(persisted.upstream.username, "routekeeper")
         XCTAssertEqual(persisted.upstream.password, "")
         let restored = SandboxSession(preferences: defaults)
+        XCTAssertEqual(restored.configuration.target, .claudeDesktop)
+        XCTAssertTrue(restored.configuration.persistClaudeLogin)
         XCTAssertEqual(restored.configuration.upstream.password, "")
+    }
+
+    @MainActor func testClearClaudeLoginStateRemovesOnlyOwnedProfile() throws {
+        let suite = "guard-profile-clear-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-profile-clear-\(UUID())", isDirectory: true)
+        let profiles = temp.appendingPathComponent("Profiles", isDirectory: true)
+        let ownedHome = profiles.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
+        let unowned = profiles.appendingPathComponent("Other/Home", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: temp)
+        }
+        try FileManager.default.createDirectory(at: ownedHome, withIntermediateDirectories: true)
+        try Data("owned".utf8).write(to: ownedHome.appendingPathComponent(".routekeeper-profile"))
+        try FileManager.default.createDirectory(at: unowned, withIntermediateDirectories: true)
+
+        let session = SandboxSession(
+            preferences: defaults,
+            sessionsRoot: temp.appendingPathComponent("Isolation", isDirectory: true),
+            profilesRoot: profiles
+        )
+        XCTAssertTrue(session.persistedClaudeProfileAvailable)
+        XCTAssertTrue(session.clearClaudeLoginState())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedHome.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unowned.path))
+        XCTAssertFalse(session.persistedClaudeProfileAvailable)
+    }
+
+    @MainActor func testManualNetworkPauseSurvivesSleepAndNeverAutoResumes() {
+        let suite = "guard-manual-pause-sleep-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = SandboxSession(preferences: defaults)
+
+        session.phase = .running
+        session.networkEnabled = true
+        session.pauseNetwork()
+        session.networkEnvironmentChanged("系统即将休眠", sleeping: true, waking: false)
+
+        XCTAssertEqual(session.pauseReason, .manual)
+        XCTAssertFalse(session.networkValidationInProgress)
+
+        session.networkEnvironmentChanged("系统已唤醒", sleeping: false, waking: true)
+
+        XCTAssertEqual(session.pauseReason, .manual)
+        XCTAssertFalse(session.networkValidationInProgress)
     }
 
     @MainActor func testClearLocalInformationRemovesOwnedDataAndSandboxCopies() async throws {
@@ -170,6 +333,7 @@ final class PresentationTests: XCTestCase {
         )
         store.settings.targetIP = "1.2.3.4"
         store.events = [GuardEvent(message: "private test event")]
+        store.cleanupIncludesLocalData = true
         store.snapshot = DiagnosticSnapshot(
             settings: store.settings,
             checks: [],
@@ -190,6 +354,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(store.settings, GuardSettings())
         XCTAssertNil(store.snapshot)
         XCTAssertTrue(store.events.isEmpty)
+        XCTAssertFalse(store.cleanupIncludesLocalData)
         XCTAssertNil(defaults.object(forKey: "guard-settings-v1"))
         XCTAssertNil(defaults.object(forKey: "routekeeper-test-private-value"))
         XCTAssertNil(defaults.object(forKey: L10n.languageKey))
@@ -198,7 +363,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unownedDirectory.path))
     }
 
-    func testSandboxEnvironmentCarriesCanonicalIsolationPaths() {
+    func testSandboxEnvironmentCarriesCanonicalIsolationPaths() throws {
         let root = URL(fileURLWithPath: "/private/tmp/routekeeper-environment-test", isDirectory: true)
         let layout = IsolationSessionLayout(root: root)
         let paths = IsolationResolvedPaths(
@@ -208,7 +373,7 @@ final class PresentationTests: XCTestCase {
         )
         let environment = SandboxSession.baseEnvironment(
             configuration: IsolationConfiguration(
-                projectPath: paths.originalProject.path,
+                projectPath: try XCTUnwrap(paths.originalProject).path,
                 exchangePath: paths.exchange.path,
                 timezoneIdentifier: "Asia/Shanghai"
             ),
@@ -218,7 +383,7 @@ final class PresentationTests: XCTestCase {
 
         XCTAssertEqual(environment["ISOLATION_WORKSPACE"], layout.workspace.path)
         XCTAssertEqual(environment["ISOLATION_EXCHANGE"], paths.exchange.path)
-        XCTAssertEqual(environment["ISOLATION_ORIGINAL"], paths.originalProject.path)
+        XCTAssertEqual(environment["ISOLATION_ORIGINAL"], try XCTUnwrap(paths.originalProject).path)
         XCTAssertEqual(environment["ISOLATION_CONTROL"], layout.control.path)
         XCTAssertEqual(environment["HTTPS_PROXY"], "http://127.0.0.1:43123")
     }
@@ -256,6 +421,65 @@ final class PresentationTests: XCTestCase {
         let callCount = await calls.count()
         XCTAssertEqual(callCount, 2)
         XCTAssertEqual(store.activeFamilies, Set([.ipv4]))
+    }
+
+    @MainActor
+    func testSandboxIsTopLevelNavigationAndNotAProtectionSubsection() throws {
+        let pages = GuardPage.allCases
+        XCTAssertTrue(pages.contains(.sandbox))
+        XCTAssertLessThan(try XCTUnwrap(pages.firstIndex(of: .sandbox)),
+                          try XCTUnwrap(pages.firstIndex(of: .protection)))
+        XCTAssertEqual(GuardPage.sandbox.title, "沙箱")
+        XCTAssertFalse(ProtectionSection.allCases.map(\.rawValue).contains("sandbox"))
+        XCTAssertFalse(ProtectionSection.allCases.map(\.rawValue).contains("settings"))
+        XCTAssertEqual(ProtectionSection.allCases, [.authentication, .networkSettings])
+        XCTAssertEqual(SandboxSection.allCases, [.overview, .scope, .network, .diagnostics])
+    }
+
+    @MainActor
+    func testSandboxExitDetectionRunsFreshCheckWhileSandboxModeIsEnabled() async {
+        actor Calls {
+            private(set) var value = 0
+            func increment() { value += 1 }
+            func count() -> Int { value }
+        }
+        let calls = Calls()
+        let suite = "guard-sandbox-exit-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = GuardStore(
+            defaults: defaults,
+            watchNetwork: false,
+            notificationsEnabled: false,
+            runDiagnostic: { settings in
+                await calls.increment()
+                var snapshot = DiagnosticSnapshot(
+                    settings: settings,
+                    checks: [],
+                    proxyIP: "4.3.2.1",
+                    tunnelIP: "4.3.2.1",
+                    processes: [],
+                    desktopPath: nil,
+                    codePaths: []
+                )
+                snapshot.familyExits = [
+                    .init(family: .ipv4, direct: "4.3.2.1", proxied: "4.3.2.1"),
+                    .init(family: .ipv6, direct: nil, proxied: nil)
+                ]
+                snapshot.enabledFamilies = [.ipv4]
+                return snapshot
+            }
+        )
+
+        store.settings.experimentalSandboxEnabled = true
+        let detected = await store.detectExitForSandbox()
+
+        XCTAssertTrue(detected)
+        XCTAssertEqual(store.settings.fixedIPv4TargetIP, "4.3.2.1")
+        XCTAssertEqual(store.snapshot?.proxyIP, "4.3.2.1")
+        let callCount = await calls.count()
+        XCTAssertEqual(callCount, 1)
+        XCTAssertFalse(store.monitoring)
     }
 
     @MainActor

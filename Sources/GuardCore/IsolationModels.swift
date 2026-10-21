@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CryptoKit
 import SystemConfiguration
 
 public enum IsolationPhase: String, Codable, Equatable, Sendable {
@@ -29,6 +30,18 @@ public enum IsolationUpstreamProtocol: String, Codable, CaseIterable, Sendable {
         switch self {
         case .httpConnect: return "HTTP CONNECT"
         case .socks5: return "SOCKS5"
+        }
+    }
+}
+
+public enum IsolationApplicationTarget: String, Codable, CaseIterable, Sendable {
+    case claudeCode
+    case claudeDesktop
+
+    public var title: String {
+        switch self {
+        case .claudeCode: return "Claude Code"
+        case .claudeDesktop: return "Claude Desktop"
         }
     }
 }
@@ -113,6 +126,63 @@ public struct SystemProxyDescriptor: Equatable, Sendable {
     }
 }
 
+/// A non-persistent comparison point for deciding whether a network event
+/// actually changed the route Claude depends on.
+public struct NetworkFingerprint: Equatable, Sendable {
+    public var proxyHost: String?
+    public var proxyPort: Int?
+    public var proxyProtocol: IsolationUpstreamProtocol?
+    public var authMarker: String
+    public var upstreamReachable: Bool
+    public var exitAnchor: String?
+
+    public init(
+        proxy: SystemProxyDescriptor?,
+        upstream: IsolationUpstream,
+        upstreamReachable: Bool,
+        exitAnchor: String?
+    ) {
+        let effectiveProxy = proxy ?? SystemProxyDescriptor(
+            host: upstream.host,
+            port: upstream.port,
+            protocolType: upstream.protocolType
+        )
+        proxyHost = IsolationUpstream.normalizedHost(effectiveProxy.host)
+        proxyPort = effectiveProxy.port
+        proxyProtocol = effectiveProxy.protocolType
+        authMarker = Self.authenticationMarker(
+            username: upstream.username,
+            password: upstream.password
+        )
+        self.upstreamReachable = upstreamReachable
+        self.exitAnchor = exitAnchor.flatMap(IPAddress.normalized)
+    }
+
+    public var hasLiveRoute: Bool {
+        upstreamReachable && exitAnchor != nil
+    }
+
+    /// The proxy and credential identity, excluding the probe-only exit address.
+    public func materialConfigurationMatches(_ other: NetworkFingerprint) -> Bool {
+        proxyHost == other.proxyHost
+            && proxyPort == other.proxyPort
+            && proxyProtocol == other.proxyProtocol
+            && authMarker == other.authMarker
+    }
+
+    public var summary: String {
+        guard let proxyHost, let proxyPort, let proxyProtocol else { return "网络配置未知" }
+        return "\(proxyProtocol.title) · \(proxyHost):\(proxyPort)"
+    }
+
+    public static func authenticationMarker(username: String, password: String) -> String {
+        guard !username.isEmpty || !password.isEmpty else { return "anonymous" }
+        let material = Data("\(username)\u{0}\(password)".utf8)
+        let digest = SHA256.hash(data: material)
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 public struct IsolationExpectedExits: Equatable, Sendable {
     public var ipv4: String?
     public var ipv6: String?
@@ -159,6 +229,20 @@ public enum IsolationSessionEnvironment {
     public static func languageIdentifier(forLocale locale: String) -> String {
         String(locale.split(separator: "_").first ?? "en")
     }
+
+    public static func appleLanguageIdentifier(forLocale locale: String) -> String {
+        let normalized = locale.replacingOccurrences(of: ".UTF-8", with: "")
+        switch normalized {
+        case "zh_CN":
+            return "zh-Hans"
+        case "zh_HK":
+            return "zh-Hant-HK"
+        case "zh_TW":
+            return "zh-Hant"
+        default:
+            return normalized.replacingOccurrences(of: "_", with: "-")
+        }
+    }
 }
 
 public struct IsolationConfiguration: Codable, Equatable, Sendable {
@@ -166,22 +250,57 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
     public var exchangePath: String
     public var timezoneIdentifier: String
     public var upstream: IsolationUpstream
+    public var target: IsolationApplicationTarget
+    public var persistClaudeLogin: Bool
 
     public init(
         projectPath: String = "",
         exchangePath: String = "",
         timezoneIdentifier: String = TimeZone.current.identifier,
-        upstream: IsolationUpstream = IsolationUpstream()
+        upstream: IsolationUpstream = IsolationUpstream(),
+        target: IsolationApplicationTarget = .claudeCode,
+        persistClaudeLogin: Bool = false
     ) {
         self.projectPath = projectPath
         self.exchangePath = exchangePath
         self.timezoneIdentifier = timezoneIdentifier
         self.upstream = upstream
+        self.target = target
+        self.persistClaudeLogin = persistClaudeLogin
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case projectPath, exchangePath, timezoneIdentifier, upstream, target, persistClaudeLogin
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectPath = try container.decodeIfPresent(String.self, forKey: .projectPath) ?? ""
+        exchangePath = try container.decodeIfPresent(String.self, forKey: .exchangePath) ?? ""
+        timezoneIdentifier = try container.decodeIfPresent(String.self, forKey: .timezoneIdentifier)
+            ?? TimeZone.current.identifier
+        upstream = try container.decodeIfPresent(IsolationUpstream.self, forKey: .upstream)
+            ?? IsolationUpstream()
+        target = try container.decodeIfPresent(IsolationApplicationTarget.self, forKey: .target)
+            ?? .claudeCode
+        persistClaudeLogin = try container.decodeIfPresent(Bool.self, forKey: .persistClaudeLogin)
+            ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectPath, forKey: .projectPath)
+        try container.encode(exchangePath, forKey: .exchangePath)
+        try container.encode(timezoneIdentifier, forKey: .timezoneIdentifier)
+        try container.encode(upstream, forKey: .upstream)
+        try container.encode(target, forKey: .target)
+        try container.encode(persistClaudeLogin, forKey: .persistClaudeLogin)
     }
 
     public var hasRequiredPaths: Bool {
-        !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !exchangePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasExchange = !exchangePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasProject = !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasExchange && (target == .claudeDesktop || hasProject)
     }
 
     public var hasValidTimezone: Bool {
@@ -214,14 +333,29 @@ public struct IsolationSessionLayout: Equatable, Sendable {
 }
 
 public struct IsolationResolvedPaths: Equatable, Sendable {
-    public var originalProject: URL
+    public var originalProject: URL?
     public var exchange: URL
     public var layout: IsolationSessionLayout
+    public var identityHome: URL?
 
-    public init(originalProject: URL, exchange: URL, layout: IsolationSessionLayout) {
+    public init(
+        originalProject: URL?,
+        exchange: URL,
+        layout: IsolationSessionLayout,
+        identityHome: URL? = nil
+    ) {
         self.originalProject = originalProject
         self.exchange = exchange
         self.layout = layout
+        self.identityHome = identityHome
+    }
+
+    public var runtimeHome: URL {
+        identityHome ?? layout.home
+    }
+
+    public var sandboxWritablePaths: [URL] {
+        layout.writablePaths + (identityHome.map { [$0] } ?? [])
     }
 }
 
@@ -266,12 +400,16 @@ public enum IsolationPathValidator {
     ) throws -> IsolationResolvedPaths {
         let projectText = configuration.projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let exchangeText = configuration.exchangePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !projectText.isEmpty else { throw IsolationValidationError.missingProject }
+        guard configuration.target == .claudeDesktop || !projectText.isEmpty else {
+            throw IsolationValidationError.missingProject
+        }
         guard !exchangeText.isEmpty else { throw IsolationValidationError.missingExchange }
         guard configuration.hasValidTimezone else { throw IsolationValidationError.invalidTimezone }
         guard configuration.upstream.isValid else { throw IsolationValidationError.invalidUpstream }
 
-        let project = canonicalURL(URL(fileURLWithPath: projectText, isDirectory: true))
+        let project = projectText.isEmpty
+            ? nil
+            : canonicalURL(URL(fileURLWithPath: projectText, isDirectory: true))
         let exchange = canonicalURL(URL(fileURLWithPath: exchangeText, isDirectory: true))
         let root = canonicalURL(sessionRoot)
         let realHome = canonicalURL(home)
@@ -279,23 +417,26 @@ public enum IsolationPathValidator {
             .appendingPathComponent("Library/Application Support", isDirectory: true)
         let realApplicationSupport = canonicalURL(applicationSupport)
 
-        guard isDirectory(project, fileManager: fileManager) else {
+        if let project, !isDirectory(project, fileManager: fileManager) {
             throw IsolationValidationError.notDirectory(project.path)
         }
         guard isDirectory(exchange, fileManager: fileManager) else {
             throw IsolationValidationError.notDirectory(exchange.path)
         }
-        for path in [project, exchange] {
+        for path in [project, exchange].compactMap({ $0 }) {
             guard path.path != "/", path.path != realHome.path else {
                 throw IsolationValidationError.unsafePath(path.path)
             }
         }
-        guard !contains(project, exchange), !contains(exchange, project) else {
-            throw IsolationValidationError.pathsOverlap
+        if let project {
+            guard !contains(project, exchange), !contains(exchange, project) else {
+                throw IsolationValidationError.pathsOverlap
+            }
         }
-        guard !contains(root, project), !contains(project, root),
-              !contains(root, exchange), !contains(exchange, root) else {
-            throw IsolationValidationError.unsafePath(root.path)
+        for path in [project, exchange].compactMap({ $0 }) {
+            guard !contains(root, path), !contains(path, root) else {
+                throw IsolationValidationError.unsafePath(root.path)
+            }
         }
         guard contains(realApplicationSupport, root) else {
             throw IsolationValidationError.sessionRootOutsideApplicationSupport
@@ -369,7 +510,7 @@ public enum IsolationSandboxProfile {
         lines.append("(deny mach-lookup)")
         lines += readableRoots.map { "(allow file-read* (subpath \(literal($0))))" }
         let readableUserPaths = [
-            paths.layout.home,
+            paths.runtimeHome,
             paths.layout.temporary,
             paths.layout.workspace,
             paths.exchange,
@@ -378,7 +519,7 @@ public enum IsolationSandboxProfile {
         lines += readableUserPaths.map { "(allow file-read* (subpath \(literal($0.path))))" }
         lines.append("(allow file-map-executable (subpath \(literal(executable.deletingLastPathComponent().path))))")
 
-        let writablePaths = paths.layout.writablePaths + [paths.exchange]
+        let writablePaths = paths.sandboxWritablePaths + [paths.exchange]
         lines += writablePaths.map { "(allow file-write* (subpath \(literal($0.path))))" }
         lines += [
             #"(allow file-read* file-write* (literal "/dev/null"))"#,
@@ -388,11 +529,159 @@ public enum IsolationSandboxProfile {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// The GUI profile keeps file and outbound-network boundaries, while allowing
+    /// the system services a signed Chromium-based desktop app needs to start.
+    public static func makeDesktop(
+        paths: IsolationResolvedPaths,
+        applicationURL: URL,
+        relayPort: Int,
+        inputMethodApplications: [URL] = []
+    ) -> String {
+        precondition((1...65535).contains(relayPort))
+        let application = applicationURL.standardizedFileURL.resolvingSymlinksInPath()
+        var readableRoots = [
+            "/System", "/usr", "/bin", "/sbin", "/Library/Apple",
+            "/private/etc", "/private/var/db/dyld", "/private/var/select"
+        ]
+        if application.path.hasPrefix("/Applications/") {
+            readableRoots.append("/Applications")
+        }
+
+        var lines = [
+            "(version 1)",
+            "(deny default)",
+            #"(import "system.sb")"#,
+            "(deny network*)",
+            "(allow process*)",
+            "(allow signal (target same-sandbox))",
+            "(allow sysctl-read)",
+            "(allow ipc-posix-shm)",
+            "(allow file-read-metadata)",
+            // Desktop families need WindowServer, TCC and helper IPC. Network
+            // and filesystem access remain constrained by the rules below.
+            "(allow mach-lookup)",
+            // Chromium's bootstrap rendezvous server and crashpad helper
+            // register per-process dynamic Mach services at startup.
+            #"(allow mach-register (global-name-regex #"^Q6L2SF6YDW\.com\.anthropic\.claudefordesktop\.MachPortRendezvousServer\.[0-9]+$"))"#,
+            #"(allow mach-register (global-name-prefix "org.chromium.crashpad.child_port_handshake."))"#,
+            "(allow iokit-open)"
+        ]
+        lines += readableRoots.map { "(allow file-read* (subpath \(literal($0))))" }
+
+        let readableUserPaths = [
+            paths.runtimeHome,
+            paths.layout.temporary,
+            paths.layout.workspace,
+            paths.exchange,
+            application
+        ]
+        lines += readableUserPaths.map { "(allow file-read* (subpath \(literal($0.path))))" }
+        lines.append("(allow file-map-executable (subpath \(literal(application.path))))")
+        for inputMethod in inputMethodApplications {
+            let bundle = inputMethod.standardizedFileURL.resolvingSymlinksInPath()
+            lines.append("(allow file-read* (subpath \(literal(bundle.path))))")
+            lines.append("(allow file-map-executable (subpath \(literal(bundle.path))))")
+        }
+
+        let writablePaths = paths.sandboxWritablePaths + [paths.exchange]
+        lines += writablePaths.map { "(allow file-write* (subpath \(literal($0.path))))" }
+        let scienceControlSocket = paths.runtimeHome
+            .appendingPathComponent(".claude-science/daemon.sock", isDirectory: false)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        lines += [
+            #"(allow file-read* file-write* (literal "/dev/null"))"#,
+            #"(allow file-read* file-write* (literal "/dev/tty"))"#,
+            // The signed Claude daemon creates a private multiplexer directory
+            // with this fixed prefix under /private/tmp. Keep every other
+            // global temporary path outside the sandbox.
+            #"(allow file-read* file-write* (regex #"^/private/tmp/op-mux-[^/]+(/|$)"))"#,
+            // The desktop shell and daemon communicate over an OS-assigned
+            // loopback port. Outbound traffic remains limited to local IPC and
+            // the relay; internet-bound connections cannot use these rules.
+            #"(allow network-outbound (remote ip "localhost:*"))"#,
+            // Claude Science also exposes a control socket under its isolated
+            // data directory. File-write access alone does not grant the
+            // separate Seatbelt network-bind/outbound operations.
+            "(allow network-bind network-inbound network-outbound (literal \(literal(scienceControlSocket.path))))",
+            // Seatbelt requires network-inbound for a TCP listener, but its
+            // localhost predicate cannot distinguish a loopback bind from a
+            // wildcard bind. Routekeeper audits the live listener addresses.
+            #"(allow network-inbound (local ip "localhost:*"))"#,
+            #"(allow network-outbound (remote ip "localhost:PORT"))"#.replacingOccurrences(
+                of: "PORT",
+                with: String(relayPort)
+            )
+        ]
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     private static func literal(_ value: String) -> String {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+}
+
+public enum InputMethodCompatibility {
+    /// Reads only input-source identifiers. The helper never copies dictionaries,
+    /// history, or other user data from an input method.
+    public static func referencedBundleIdentifiers(in preferences: [String: Any]) -> Set<String> {
+        let keys = ["AppleEnabledInputSources", "AppleSelectedInputSources"]
+        var result = Set<String>()
+        for key in keys {
+            let rows = preferences[key] as? [[String: Any]] ?? []
+            for row in rows {
+                guard let identifier = row["Bundle ID"] as? String,
+                      !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                result.insert(identifier)
+            }
+        }
+        return result
+    }
+
+    public static func enabledApplications(
+        defaults: UserDefaults = UserDefaults(suiteName: "com.apple.HIToolbox") ?? .standard,
+        roots: [URL] = [
+            URL(fileURLWithPath: "/Library/Input Methods", isDirectory: true),
+            URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+                .appendingPathComponent("Library/Input Methods", isDirectory: true)
+        ],
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let identifiers = referencedBundleIdentifiers(in: defaults.dictionaryRepresentation())
+        guard !identifiers.isEmpty else { return [] }
+        var applications: [URL] = []
+        for root in roots {
+            let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for entry in entries where entry.pathExtension == "app" {
+                let resolvedEntry = entry.standardizedFileURL.resolvingSymlinksInPath()
+                guard resolvedEntry.deletingLastPathComponent() == resolvedRoot else {
+                    continue
+                }
+                let info = resolvedEntry.appendingPathComponent("Contents/Info.plist")
+                guard let data = try? Data(contentsOf: info),
+                      let plist = try? PropertyListSerialization.propertyList(
+                        from: data,
+                        options: [],
+                        format: nil
+                      ) as? [String: Any],
+                      let identifier = plist["CFBundleIdentifier"] as? String,
+                      identifiers.contains(identifier) else {
+                    continue
+                }
+                applications.append(resolvedEntry)
+            }
+        }
+        return applications.sorted { $0.path < $1.path }
     }
 }
 

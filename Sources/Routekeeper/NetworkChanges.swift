@@ -9,12 +9,20 @@ final class NetworkChanges {
     private var store: SCDynamicStore?
     private var tokens: [NSObjectProtocol] = []
     private var receivedInitialPath = false
+    private var lastPathSignature = ""
     var onChange: ((String, Bool, Bool) -> Void)?
     init() {
-        monitor.pathUpdateHandler = { [weak self] _ in
+        monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
                 guard let self else { return }
+                let signature = "\(String(describing: path.status)):"
+                    + path.availableInterfaces
+                        .map { "\($0.name):\(String(describing: $0.type))" }
+                        .sorted()
+                        .joined(separator: ",")
+                defer { self.lastPathSignature = signature }
                 if !self.receivedInitialPath { self.receivedInitialPath = true; return }
+                guard signature != self.lastPathSignature else { return }
                 self.onChange?("网络路径变化，旧检查已作废", false, false)
             }
         }
@@ -26,7 +34,19 @@ final class NetworkChanges {
             MainActor.assumeIsolated { instance.onChange?("系统代理、DNS 或网络地址发生变化", false, false) }
         }, &context)
         if let store {
-            SCDynamicStoreSetNotificationKeys(store, nil, ["State:/Network/Global/.*", "State:/Network/Service/.*/IPv[46]", "State:/Network/Service/.*/DNS", "State:/Network/Service/.*/Proxies"] as CFArray)
+            // DNS is resolved by the upstream proxy, so resolver churn is not a
+            // reason to interrupt the relay. Route changes still arrive from
+            // NWPathMonitor and preflight remains the fail-closed backstop.
+            SCDynamicStoreSetNotificationKeys(
+                store,
+                nil,
+                [
+                    "State:/Network/Global/Proxies",
+                    "State:/Network/Global/IPv4",
+                    "State:/Network/Global/IPv6",
+                    "State:/Network/Service/.*/Proxies"
+                ] as CFArray
+            )
             SCDynamicStoreSetDispatchQueue(store, .main)
         }
         let nc = NSWorkspace.shared.notificationCenter

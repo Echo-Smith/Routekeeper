@@ -4,11 +4,11 @@ import SwiftUI
 struct InspectionPage: View {
     @Bindable var store: GuardStore
     @Bindable var audit: EgressAuditController
-    let onOpenProtection: () -> Void
-    let onOpenAdvancedNetwork: () -> Void
+    let onOpenNetworkSettings: () -> Void
 
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
-    @State private var showChecks = false
+    @State private var showEgressDetails = false
+    @State private var groupExpansionOverrides: [InspectionCheckGroupKind: Bool] = [:]
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -17,16 +17,19 @@ struct InspectionPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             summaryPanel
-            GatewayVerificationPage(
-                controller: store.gatewayVerification,
-                mode: store.settings.gatewayProtectionMode,
-                onOpenAdvancedNetwork: onOpenAdvancedNetwork
-            )
+            if store.settings.gatewayProtectionMode != .off {
+                GatewayVerificationPage(
+                    controller: store.gatewayVerification,
+                    mode: store.settings.gatewayProtectionMode,
+                    onChangeMode: onOpenNetworkSettings
+                )
+            }
             if !attentionItems.isEmpty {
                 attentionPanel
             }
-            selfCheckDetails
-            EgressAuditPage(store: store, audit: audit, embedded: true)
+            resultGroupsPanel
+            egressDetailsPanel
+            boundaryNote
         }
     }
 
@@ -75,6 +78,11 @@ struct InspectionPage: View {
                     Text(text("监控中自动核验", "Monitoring checks automatically"))
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
+                    Button(action: onOpenNetworkSettings) {
+                        Label(text("网络保护", "Network protection"), systemImage: "shield.lefthalf.filled")
+                    }
+                    .routekeeperSecondaryButton()
+                    .accessibilityIdentifier("inspection-open-network-settings")
                     Button {
                         Task { await runFullCheck() }
                     } label: {
@@ -136,62 +144,289 @@ struct InspectionPage: View {
                 }
             }
             Button {
-                onOpenProtection()
+                onOpenNetworkSettings()
             } label: {
-                Label(text("打开保护设置", "Open protection settings"), systemImage: "shield.lefthalf.filled")
-            }
-        }
-    }
-
-    private var selfCheckDetails: some View {
-        GuardCard(
-            title: text("自检项目", "Self-check items"),
-            subtitle: selfCheckSubtitle
-        ) {
-            DisclosureGroup(isExpanded: $showChecks) {
-                if let snapshot = store.snapshot {
-                    VStack(spacing: 0) {
-                        ForEach(snapshot.checks) { row in
-                            CheckRow(row: row).padding(.vertical, 4)
-                            if row.id != snapshot.checks.last?.id {
-                                AppHairline()
-                            }
-                        }
-                    }
-                    .padding(.top, 8)
-                } else {
-                    Text(L("checks.empty"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
-                }
-            } label: {
-                HStack {
-                    Text(text("查看全部 \(store.snapshot?.checks.count ?? 0) 项", "View all \(store.snapshot?.checks.count ?? 0) items"))
-                        .font(.callout.weight(.medium))
-                    Spacer()
-                }
+                Label(text("打开网络保护", "Open network protection"), systemImage: "shield.lefthalf.filled")
             }
         }
     }
 
     private var attentionItems: [CheckItem] {
-        store.snapshot?.checks.filter(\.needsAttention) ?? []
+        allCheckItems.filter(\.needsAttention)
     }
 
-    private var passedCount: Int {
-        store.snapshot?.checks.filter { $0.level == .passed }.count ?? 0
+    private var allCheckItems: [CheckItem] {
+        (store.snapshot?.checks ?? []) + egressCheckItems
     }
 
-    private var selfCheckSubtitle: String {
-        guard let snapshot = store.snapshot else { return L("checks.empty") }
-        let warningCount = snapshot.checks.filter { $0.level == .warning }.count
-        if warningCount > 0 {
-            return text("\(passedCount)/\(snapshot.checks.count) 项通过 · \(warningCount) 项提示",
-                        "\(passedCount)/\(snapshot.checks.count) passed · \(warningCount) notice")
+    private var inspectionGroups: [InspectionCheckGroup] {
+        InspectionCheckGrouping.groups(from: allCheckItems)
+    }
+
+    private var resultGroupsPanel: some View {
+        GuardCard(
+            title: text("检查结果", "Check results"),
+            subtitle: resultGroupsSubtitle
+        ) {
+            if inspectionGroups.isEmpty {
+                Text(L("checks.empty"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(inspectionGroups.enumerated()), id: \.element.id) { index, group in
+                        checkGroupRow(group)
+                        if index < inspectionGroups.count - 1 {
+                            AppHairline()
+                        }
+                    }
+                }
+            }
         }
-        return text("\(passedCount)/\(snapshot.checks.count) 项通过",
-                    "\(passedCount)/\(snapshot.checks.count) passed")
+    }
+
+    private func checkGroupRow(_ group: InspectionCheckGroup) -> some View {
+        let expanded = groupIsExpanded(group)
+        return VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    groupExpansionOverrides[group.kind] = !expanded
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: group.kind.symbol)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Color.primary.opacity(0.045),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.kind.title)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(group.kind.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    Text(groupLevelTitle(group.level))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(groupLevelColor(group.level))
+                    Text(text("\(group.passedCount)/\(group.checks.count)", "\(group.passedCount)/\(group.checks.count)"))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("inspection-group-\(group.kind.rawValue)")
+
+            if expanded {
+                VStack(spacing: 0) {
+                    ForEach(group.checks) { row in
+                        CheckRow(row: row)
+                            .padding(.vertical, 4)
+                        if row.id != group.checks.last?.id {
+                            AppHairline()
+                        }
+                    }
+                }
+                .padding(.leading, 44)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private func groupIsExpanded(_ group: InspectionCheckGroup) -> Bool {
+        groupExpansionOverrides[group.kind]
+            ?? group.checks.contains { $0.level != .passed }
+    }
+
+    private func groupLevelTitle(_ level: InspectionCheckGroupLevel) -> String {
+        switch level {
+        case .notRun: return text("未运行", "Not run")
+        case .passed: return text("通过", "Passed")
+        case .notice: return text("有提示", "Notice")
+        case .unverified: return text("未验证", "Unverified")
+        case .needsAttention: return text("需处理", "Needs attention")
+        }
+    }
+
+    private func groupLevelColor(_ level: InspectionCheckGroupLevel) -> Color {
+        switch level {
+        case .passed: return appAccent
+        case .needsAttention, .notice: return .orange
+        case .unverified, .notRun: return .secondary
+        }
+    }
+
+    private var resultGroupsSubtitle: String {
+        guard !inspectionGroups.isEmpty else { return L("checks.empty") }
+        let normal = inspectionGroups.filter { $0.level == .passed }.count
+        let pending = inspectionGroups.count - normal
+        if pending == 0 {
+            return text("\(inspectionGroups.count) 个方面均正常", "\(inspectionGroups.count) areas are normal")
+        }
+        return text("\(inspectionGroups.count) 个方面 · \(normal) 正常 · \(pending) 需确认",
+                    "\(inspectionGroups.count) areas · \(normal) normal · \(pending) need review")
+    }
+
+    private var egressCheckItems: [CheckItem] {
+        guard let report = audit.report else {
+            guard store.snapshot != nil else { return [] }
+            return [
+                CheckItem(
+                    "egress-audit",
+                    text("出口体检结论", "Egress assessment"),
+                    text("尚未运行出口体检；本机自检不能替代外部出口与服务探测。",
+                         "The egress check has not run. Local checks cannot replace external exit and service probes."),
+                    .unknown
+                )
+            ]
+        }
+
+        var rows: [CheckItem] = []
+        let findings = report.assessment.findings.map(\.localizedDescription)
+        let assessmentDetail: String
+        let assessmentLevel: CheckLevel
+        switch report.assessment.level {
+        case .clear:
+            assessmentLevel = .passed
+            assessmentDetail = text(
+                "系统与代理出口、服务可达性和本地网络路径未发现明显冲突。",
+                "No obvious conflict was found across exits, service reachability or local network paths."
+            )
+        case .attention:
+            assessmentLevel = .warning
+            assessmentDetail = findings.isEmpty
+                ? text("出口体检发现需要核对的项目。", "The egress check found items to review.")
+                : findings.prefix(3).joined(separator: "；")
+        case .insufficient:
+            assessmentLevel = .unknown
+            assessmentDetail = findings.isEmpty
+                ? text("部分出口证据不足；缺失结果不会被当作通过。",
+                       "Some exit evidence is incomplete; missing results are not treated as a pass.")
+                : findings.prefix(3).joined(separator: "；")
+        }
+        rows.append(CheckItem("egress-audit", text("出口体检结论", "Egress assessment"),
+                              assessmentDetail, assessmentLevel))
+
+        if report.services.isEmpty {
+            rows.append(CheckItem(
+                "egress-service",
+                text("Claude 服务可达性", "Claude service reachability"),
+                text("本次没有取得服务探测结果。", "No service probe result was available."),
+                .unknown
+            ))
+        } else {
+            let reached = report.services.filter(\.reachedTLS).count
+            let level: CheckLevel = reached == report.services.count
+                ? .passed
+                : reached == 0 ? .failed : .warning
+            rows.append(CheckItem(
+                "egress-service",
+                text("Claude 服务可达性", "Claude service reachability"),
+                text("\(reached)/\(report.services.count) 条 HTTPS/TLS 探测完成连接。",
+                     "\(reached)/\(report.services.count) HTTPS/TLS probes reached the service."),
+                level
+            ))
+        }
+
+        if let ipv6 = report.ipv6 {
+            let item: (String, CheckLevel) = ipv6CheckSummary(ipv6)
+            rows.append(CheckItem("egress-ipv6", text("IPv6 分流", "IPv6 routing"), item.0, item.1))
+        }
+        return rows
+    }
+
+    private func ipv6CheckSummary(_ report: IPv6EgressReport) -> (String, CheckLevel) {
+        switch report.state {
+        case .disabled:
+            return (text("本机未启用可用 IPv6，本次没有形成 IPv6 分流路径。",
+                         "No usable IPv6 is enabled, so no IPv6 split route was formed."), .passed)
+        case .noClaudePath:
+            return (text("未观察到 Claude 的 IPv6 可达路径。",
+                         "No reachable Claude IPv6 path was observed."), .passed)
+        case .tunneled:
+            return (text("Claude IPv6 路径经过 TUN，系统与代理出口一致。",
+                         "Claude IPv6 uses TUN and the system and proxy exits match."), .passed)
+        case .tunnelUnconfirmed:
+            return (text("Claude IPv6 经过 TUN，但代理路径未返回 IPv6 出口。",
+                         "Claude IPv6 uses TUN, but the proxy path returned no IPv6 exit."), .warning)
+        case .tunnelExitMismatch:
+            return (text("IPv6 虽经过 TUN，但系统与代理公网出口不同。",
+                         "IPv6 uses TUN, but the system and proxy public exits differ."), .failed)
+        case .directExposure:
+            return (text("Claude IPv6 可从物理接口直连，可能绕过仅匹配 IPv4 的规则。",
+                         "Claude IPv6 is reachable through a physical interface and may bypass IPv4-only rules."), .failed)
+        case .unknown:
+            return (text("IPv6 路径或代理归属无法确认。",
+                         "The IPv6 path or proxy ownership could not be confirmed."), .unknown)
+        }
+    }
+
+    private var egressDetailsPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showEgressDetails.toggle()
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(text("完整出口证据", "Full egress evidence"))
+                            .font(.callout.weight(.semibold))
+                        Text(text("逐项出口、DNS/UDP、IPv6、服务可达性、时区与本机历史。",
+                                  "Exit, DNS/UDP, IPv6, service reachability, time zone and local history evidence."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(showEgressDetails ? text("收起", "Hide") : text("查看", "View"))
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(appAccent)
+                    Image(systemName: showEgressDetails ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+            .cardSurface(corner: 18)
+            .accessibilityIdentifier("inspection-egress-details")
+
+            if showEgressDetails {
+                EgressAuditPage(store: store, audit: audit, embedded: true, compact: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var boundaryNote: some View {
+        if let boundary = store.snapshot?.checks.first(where: { $0.id == "boundary" }) {
+            Text(boundary.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+        }
     }
 
     private var summaryTitle: String {

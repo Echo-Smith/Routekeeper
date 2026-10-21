@@ -1,66 +1,8 @@
 import SwiftUI
 import GuardCore
 
-struct DisclaimerPage: View {
-    static let currentVersion = "2026-10-21.2"
-
-    let onQuit: () -> Void
-    @AppStorage("routekeeper.disclaimer-accepted-version") private var acceptedVersion = ""
-
-    private func text(_ zh: String, _ en: String) -> String {
-        L10n.resolvedEnglish ? en : zh
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            GuardCard(
-                title: text("使用前请阅读", "Read before using"),
-                subtitle: text("本声明说明软件性质、使用限制、隐私处理与责任范围。",
-                              "This notice explains the software, usage limits, privacy handling and responsibility.")
-            ) {
-                JustifiedText(text(
-                    "在使用 Routekeeper（以下简称“本软件”）前，请仔细阅读并充分理解本声明的全部内容。点击“同意”即表示你已阅读、理解并接受以下全部条款；如不同意，请停止使用本软件。",
-                    "Before using Routekeeper (the “Software”), read and understand this notice. Clicking Agree confirms that you accept all terms below. If you do not agree, stop using the Software."
-                ))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            DisclaimerBody()
-
-            GuardCard(
-                title: text("当前状态", "Current status"),
-                subtitle: acceptedVersion == Self.currentVersion
-                    ? text("你已同意当前版本的免责声明。", "You accepted the current version of this notice.")
-                    : text("尚未同意当前版本的免责声明。", "The current version has not been accepted.")
-            ) {
-                HStack {
-                    Label(
-                        acceptedVersion == Self.currentVersion
-                            ? text("已同意", "Accepted")
-                            : text("等待同意", "Acceptance required"),
-                        systemImage: acceptedVersion == Self.currentVersion
-                            ? "checkmark.circle.fill"
-                            : "exclamationmark.circle"
-                    )
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(acceptedVersion == Self.currentVersion ? Color.green : Color.orange)
-
-                    Spacer()
-
-                    if acceptedVersion != Self.currentVersion {
-                        Button(text("同意", "Agree")) {
-                            acceptedVersion = Self.currentVersion
-                        }
-                        .routekeeperProminentButton()
-                    }
-                    Button(text("退出应用", "Quit"), role: .destructive, action: onQuit)
-                }
-            }
-        }
-        .frame(maxWidth: 720, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .accessibilityIdentifier("settings-disclaimer-page")
-    }
+enum DisclaimerDocument {
+    static let currentVersion = "2026-10-21.4"
 }
 
 struct DisclaimerConsentSheet: View {
@@ -84,6 +26,8 @@ struct DisclaimerConsentSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    DisclaimerScopeNotice()
+                    AppHairline()
                     JustifiedText(text(
                         "在使用 Routekeeper（以下简称“本软件”）前，请仔细阅读并充分理解本声明的全部内容。点击“同意”即表示你已阅读、理解并接受以下全部条款；如不同意，请点击“退出”并停止使用本软件。",
                         "Before using Routekeeper (the “Software”), read and understand this notice. Clicking Agree confirms that you accept all terms below. If you do not agree, click Quit and stop using the Software."
@@ -111,7 +55,7 @@ struct DisclaimerConsentSheet: View {
     }
 }
 
-private struct DisclaimerBody: View {
+struct DisclaimerBody: View {
     private struct Section: Identifiable {
         let title: String
         let body: String
@@ -123,7 +67,7 @@ private struct DisclaimerBody: View {
             return [
                 .init(
                     title: "1. Software nature",
-                    body: "Routekeeper is a local network inspection and monitoring aid. It is not an antivirus product, firewall, guarantee of network anonymity, or an official Anthropic or Claude product. Probe results may be incomplete and must be interpreted together with your own network environment."
+                    body: "Routekeeper is a local network inspection and monitoring aid. It is not an antivirus product, firewall, guarantee of network anonymity, or an official Anthropic or Claude product. In Claude Desktop, Chat is an in-app web workspace and Code uses Claude Code; the sandbox treats the official app and its helper processes as one application boundary. The sandbox enforces a traffic path but does not virtualize host network metadata: a sandboxed process may still read interface names, addresses, routes and resolver configuration even though direct LAN and public traffic is denied. Probe results may be incomplete and must be interpreted together with your own network environment."
                 ),
                 .init(
                     title: "2. Usage restrictions",
@@ -147,7 +91,7 @@ private struct DisclaimerBody: View {
                 ),
                 .init(
                     title: "7. Data collection and privacy",
-                    body: "Reports and history are stored locally. Inspection uses network requests to services such as ipify, ipinfo.io, STUN and DNS providers and claude.ai; those services can see your public egress IP. Optional third-party IP intelligence lookups remain off unless you enable them. The Software does not automatically upload saved reports. Claude sign-in tokens are stored in the macOS Keychain and are not included in reports."
+                    body: "Reports and history are stored locally. Inspection uses network requests to services such as ipify, ipinfo.io, STUN and DNS providers and claude.ai; those services can see your public egress IP. Optional third-party IP intelligence lookups remain off unless you enable them. The Software does not automatically upload saved reports. Claude Code sign-in tokens are stored in the macOS Keychain and are not included in reports. If persistent Claude Desktop sign-in is enabled, cookies and local Claude data are retained in a Routekeeper-owned application-support profile until you clear that profile or reset local information."
                 ),
                 .init(
                     title: "8. Changes to this notice",
@@ -163,7 +107,7 @@ private struct DisclaimerBody: View {
         return [
             .init(
                 title: "一、软件性质",
-                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。检测结果可能不完整，需要结合实际网络环境理解。"
+                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。Claude Desktop 的 Chat 模式是应用内网页工作区，Code 模式使用 Claude Code；沙箱把官方应用及其 helper 进程视为同一个应用边界。沙箱强制的是流量路径，不虚拟化主机网络元数据：受限进程仍可能读取网卡名称、地址、路由和 DNS 解析器配置，但局域网与公网直连会被拒绝。检测结果可能不完整，需要结合实际网络环境理解。"
             ),
             .init(
                 title: "二、使用限制",
@@ -187,7 +131,7 @@ private struct DisclaimerBody: View {
             ),
             .init(
                 title: "七、数据搜集与隐私",
-                body: "报告和历史记录保存在本机。检查过程会请求 ipify、ipinfo.io、STUN、DNS 服务及 claude.ai，这些服务能够看到当前的公网出口 IP。可选的第三方 IP 情报查询默认关闭，只有你主动开启后才会使用。本软件不会自动上传已保存的报告。Claude 登录凭证保存在 macOS 系统钥匙串中，不会写入检测报告。"
+                body: "报告和历史记录保存在本机。检查过程会请求 ipify、ipinfo.io、STUN、DNS 服务及 claude.ai，这些服务能够看到当前的公网出口 IP。可选的第三方 IP 情报查询默认关闭，只有你主动开启后才会使用。本软件不会自动上传已保存的报告。Claude Code 登录凭证保存在 macOS 系统钥匙串中，不会写入检测报告。若你启用 Claude Desktop 持久登录，Cookie 和本地 Claude 数据会保存在 Routekeeper 专属的应用支持目录中，直到你主动清除该配置或清空本地信息。"
             ),
             .init(
                 title: "八、声明变更",
@@ -217,6 +161,24 @@ private struct DisclaimerBody: View {
     }
 }
 
+struct DisclaimerScopeNotice: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                L10n.resolvedEnglish ? "Purpose and limits" : "用途与边界",
+                systemImage: "person.badge.shield.checkmark"
+            )
+            .font(.system(size: 15, weight: .semibold))
+            JustifiedText(
+                L10n.resolvedEnglish
+                    ? "Routekeeper helps users manage a Claude identity they lawfully hold, verify this Mac’s network egress, and inspect the Claude client environment. It must not be used to violate Anthropic’s Terms of Service or applicable law. Local settings do not change Anthropic’s server-side records and do not guarantee anonymity, account availability, or server-side regional status."
+                    : "Routekeeper用于帮助用户管理本人合法持有的Claude身份，并核验本机网络出口与Claude客户端环境。禁止用于违反Anthropic服务条款或适用法律的行为。本地设置不会更改Anthropic服务端记录，不保证匿名、账号可用性或服务端地区状态。"
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct JustifiedText: NSViewRepresentable {
     let content: String
 
@@ -230,7 +192,7 @@ private struct JustifiedText: NSViewRepresentable {
 
     private var attributedContent: NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .justified
+        paragraph.alignment = .natural
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineSpacing = 3
         return NSAttributedString(

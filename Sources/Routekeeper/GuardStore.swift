@@ -11,6 +11,13 @@ struct GuardEvent: Identifiable {
     var isAttention = false
 }
 
+private struct CleanupRunResult: Sendable {
+    var movedLabels: [String] = []
+    var failedLabels: [String] = []
+    var skippedCount = 0
+    var reclaimedBytes: Int64 = 0
+}
+
 @MainActor @Observable
 final class GuardStore {
     var settings: GuardSettings {
@@ -20,7 +27,7 @@ final class GuardStore {
             gatewayVerification.invalidate(
                 reason: L10n.resolvedEnglish
                     ? "Protection settings changed after gateway verification."
-                    : "保护设置已更改，之前的代理网关检查需要重做。"
+                    : "检查设置已更改，之前的代理网关检查需要重做。"
             )
             epoch += 1
             snapshot = nil
@@ -62,16 +69,22 @@ final class GuardStore {
     var notice = ""
     var clearingLocalData = false
     var cleanupPlan: CleanupPlan?
+    var cleanupPlanRevision = 0
     var cleanupBusy = false
     var cleanupSelection: Set<String> = []
+    var cleanupIncludesLocalData = false
     var cleanupResult = ""
     var cleanupCandidates: [CleanupTarget] { cleanupPlan?.targets.filter { $0.exists && $0.fileCount > 0 } ?? [] }
-    var selectedCleanupTargets: [CleanupTarget] { cleanupCandidates.filter { cleanupSelection.contains($0.id) } }
+    var selectedCleanupTargets: [CleanupTarget] {
+        cleanupCandidates.filter { $0.isSelectable && cleanupSelection.contains($0.id) }
+    }
+    var selectedCleanupBytes: Int64 { selectedCleanupTargets.reduce(0) { $0 + $1.sizeBytes } }
+    var desktopInstallation = ClaudeDesktopDiscovery.locate()
     @ObservationIgnored private var revisionHandlers: [() -> Void] = []
     var languageRevision = 0 {
         didSet { revisionHandlers.forEach { $0() } }
     }
-    var desktopInstalled: Bool { snapshot?.desktopPath != nil }
+    var desktopInstalled: Bool { snapshot?.desktopPath != nil || desktopInstallation != nil }
     var codeInstalled: Bool { ApplicationDiscovery.codePathsInstalled() }
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var egressAutomationTask: Task<Void, Never>?
@@ -155,6 +168,9 @@ final class GuardStore {
     }
 
     var sandboxModeEnabled: Bool { settings.experimentalSandboxEnabled }
+    func refreshDesktopDiscovery() {
+        desktopInstallation = ClaudeDesktopDiscovery.locate()
+    }
     func log(_ text: String, attention: Bool = false) {
         events.insert(GuardEvent(message: text, isAttention: attention), at: 0)
         if events.count > 60 { events.removeLast(events.count - 60) }
@@ -276,6 +292,47 @@ final class GuardStore {
                 : (L10n.resolvedEnglish ? "Saved matching exits; remaining check items still need attention." : "已保存一致出口；复检仍有待处理项。")
         }
     }
+
+    @discardableResult
+    func detectExitForSandbox() async -> Bool {
+        guard settings.experimentalSandboxEnabled else {
+            notice = L10n.resolvedEnglish
+                ? "Turn on sandbox mode before detecting its exit."
+                : "请先开启沙箱模式，再检测沙箱出口。"
+            return false
+        }
+        guard !monitoring, !checking, !sandbox.phase.isActive else {
+            notice = L10n.resolvedEnglish
+                ? "End the active sandbox session and wait for other checks before detecting an exit."
+                : "请先结束当前沙箱会话，并等待其他检查完成后再检测出口。"
+            return false
+        }
+        guard let result = await freshExitSnapshot() else { return false }
+
+        var updated = settings
+        var saved = 0
+        for family in IPFamily.allCases {
+            if let ip = matchingExit(in: result, family: family) {
+                updated.setFixedExit(ip, for: family)
+                saved += 1
+            }
+        }
+        guard saved > 0 else {
+            notice = L10n.resolvedEnglish
+                ? "No matching exit is available. Confirm the proxy path and run detection again."
+                : "没有找到一致出口。请确认代理链路后重新检测。"
+            return false
+        }
+        settings = updated
+        snapshot = result
+        activeFamilies = result.enabledFamilies
+        notice = L10n.resolvedEnglish
+            ? "Detected and saved the sandbox exit. Preflight will verify Claude through the same relay."
+            : "已检测并保存沙箱出口；预检会用同一中继核对 Claude。"
+        log(notice)
+        return true
+    }
+
     func adoptObservedExit(family: IPFamily) async {
         guard !settings.experimentalSandboxEnabled else {
             notice = L10n.resolvedEnglish
@@ -358,23 +415,27 @@ final class GuardStore {
         }
     }
     func environmentChanged(_ reason: String, sleeping: Bool, waking: Bool = false) {
+        if sandboxModeActive {
+            if sleeping { systemSleeping = true }
+            if waking { systemSleeping = false }
+            sandbox.networkEnvironmentChanged(reason, sleeping: sleeping, waking: waking)
+            log(
+                sleeping
+                    ? (L10n.resolvedEnglish
+                        ? "System sleep detected. Sandbox networking was closed immediately and will be revalidated after wake."
+                        : "检测到系统休眠，沙箱网络已立即关闭；唤醒后会等待稳定并自动复检。")
+                    : (L10n.resolvedEnglish
+                        ? "Network notification received. Routekeeper is waiting for a stable sample and will keep the relay open when the effective configuration is unchanged."
+                        : "收到网络状态通知，正在等待稳定采样；有效配置未变时会保留中继并避免中断 Claude。"),
+                attention: sleeping
+            )
+            return
+        }
         gatewayVerification.invalidate(
             reason: L10n.resolvedEnglish
                 ? "Network state changed; previous gateway evidence was invalidated."
                 : "网络状态已变化，之前的代理网关证据已作废。"
         )
-        if sandboxModeActive {
-            if sleeping { systemSleeping = true }
-            if waking { systemSleeping = false }
-            sandbox.invalidateNetwork(reason: reason)
-            log(
-                L10n.resolvedEnglish
-                    ? "Network changed while sandbox mode was active. Sandbox network access was paused."
-                    : "沙箱模式运行期间网络状态发生变化，已暂停沙箱网络访问。",
-                attention: true
-            )
-            return
-        }
         if sleeping { systemSleeping = true }
         if waking { systemSleeping = false }
         epoch += 1
@@ -471,15 +532,16 @@ final class GuardStore {
                 : "请先开启“实验性进程沙箱”模式。"
             return
         }
-        let expectedExits = IsolationExpectedExits(
+        var expectedExits = IsolationExpectedExits(
             ipv4: settings.target(for: .ipv4),
             ipv6: settings.target(for: .ipv6)
         )
-        guard expectedExits.hasAny else {
-            notice = L10n.resolvedEnglish
-                ? "Save an IPv4 or IPv6 exit in the ordinary network check before creating a sandbox session."
-                : "请先完成普通网络体检并保存 IPv4 或 IPv6 出口，再创建沙箱会话。保存值用于核对沙箱内 Claude 的实际出口。"
-            return
+        if !expectedExits.hasAny {
+            guard await detectExitForSandbox() else { return }
+            expectedExits = IsolationExpectedExits(
+                ipv4: settings.target(for: .ipv4),
+                ipv6: settings.target(for: .ipv6)
+            )
         }
         if settings.gatewayProtectionMode != .off
             && !gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) {
@@ -494,6 +556,18 @@ final class GuardStore {
     }
 
     func launchClaudeInSandbox() {
+        if sandbox.configuration.target == .claudeDesktop {
+            sandbox.launchClaudeDesktop()
+            log(
+                sandbox.claudeRunning
+                    ? (L10n.resolvedEnglish
+                        ? "Requested an isolated launch of the official Claude Desktop app."
+                        : "已请求启动隔离的官方 Claude Desktop。")
+                    : sandbox.message,
+                attention: !sandbox.claudeRunning
+            )
+            return
+        }
         guard let token = authentication.launchToken() else {
             sandbox.message = L10n.resolvedEnglish
                 ? "Save a Claude Code sign-in token in Keychain before launching the isolated session."
@@ -512,8 +586,8 @@ final class GuardStore {
         if settings.experimentalSandboxEnabled {
             guard sandbox.phase == .running || sandbox.phase == .networkPaused else {
                 notice = L10n.resolvedEnglish
-                    ? "Create and verify an isolated session before launching Claude Code."
-                    : "请先创建并验证隔离会话，再启动 Claude Code。"
+                    ? "Create and verify an isolated session before launching Claude."
+                    : "请先创建并验证隔离会话，再启动 Claude。"
                 return
             }
             launchClaudeInSandbox()
@@ -604,6 +678,7 @@ final class GuardStore {
         cleanupPlan = nil
         cleanupBusy = false
         cleanupSelection = []
+        cleanupIncludesLocalData = false
         cleanupResult = ""
         egressAutomationTask?.cancel()
         egressEventTask?.cancel()
@@ -675,32 +750,137 @@ final class GuardStore {
         cleanupBusy = true
         cleanupResult = ""
         cleanupSelection.removeAll()
+        let home = NSHomeDirectory()
+        let sessionsRoot = sandbox.cleanupSessionsRoot
+        let profilesRoot = sandbox.cleanupProfilesRoot
+        let currentSessionRoot = sandbox.sessionRoot
         Task {
-            let home = NSHomeDirectory()
-            let plan = await Task.detached { CacheCleaner.scan(home: home) }.value
-            cleanupPlan = plan
+            let plan = await Task.detached(priority: .userInitiated) {
+                CacheCleaner.scanWithLiveSafety(
+                    home: home,
+                    sessionsRoot: sessionsRoot,
+                    profilesRoot: profilesRoot,
+                    currentSessionRoot: currentSessionRoot
+                )
+            }.value
+            applyCleanupPlan(plan)
             cleanupBusy = false
         }
     }
 
+    func applyCleanupPlan(_ plan: CleanupPlan) {
+        cleanupPlan = plan
+        cleanupPlanRevision &+= 1
+        cleanupSelection = Set(
+            plan.targets
+                .filter { $0.exists && $0.fileCount > 0 && $0.isSelectable }
+                .map(\.id)
+        )
+    }
+
+    func selectAllCleanupTargets() {
+        cleanupSelection = Set(
+            cleanupCandidates
+                .filter(\.isSelectable)
+                .map(\.id)
+        )
+    }
+
     func runCleanup() {
-        guard !cleanupBusy, !selectedCleanupTargets.isEmpty else { return }
+        guard !cleanupBusy,
+              cleanupIncludesLocalData || !selectedCleanupTargets.isEmpty else { return }
+        if cleanupIncludesLocalData {
+            guard !checking, !capture.busy, !sandbox.busy, !networkFilter.busy,
+                  !gatewayVerification.busy, !egressAudit.busy else {
+                cleanupResult = L10n.resolvedEnglish
+                    ? "A check, sandbox, capture or filter operation is still running. Wait, then try again."
+                    : "当前仍有检查、沙箱、抓包或网络过滤操作在运行。请等待完成后再清理。"
+                return
+            }
+        }
         cleanupBusy = true
         let selected = selectedCleanupTargets
-        var moved = 0; var failed = 0
-        for target in selected {
-            if CacheCleaner.trash(target.path) { moved += 1; log("\(L10n.resolvedEnglish ? "Moved to Trash: " : "已移到废纸篓：")\(target.label)") }
-            else { failed += 1; log("\(L10n.resolvedEnglish ? "Cleanup failed: " : "清理失败：")\(target.label)", attention: true) }
-        }
-        cleanupBusy = false
-        cleanupSelection.removeAll()
-        cleanupPlan = CacheCleaner.scan(home: NSHomeDirectory())
-        cleanupResult = selected.isEmpty
-            ? (L10n.resolvedEnglish ? "No caches or logs to clean." : "没有可清理的缓存或日志。")
-            : moved > 0 && failed == 0
-                ? (L10n.resolvedEnglish ? "Moved \(moved) directories to Trash." : "已把 \(moved) 个目录移到废纸篓。")
-                : (L10n.resolvedEnglish ? "Moved \(moved), failed \(failed)." : "已移到废纸篓 \(moved) 个，失败 \(failed) 个。")
+        let includeLocalData = cleanupIncludesLocalData
+        let home = NSHomeDirectory()
+        let sessionsRoot = sandbox.cleanupSessionsRoot
+        let profilesRoot = sandbox.cleanupProfilesRoot
+        let currentSessionRoot = sandbox.sessionRoot
+        Task {
+            var result = CleanupRunResult()
+            if !selected.isEmpty {
+                result = await Task.detached(priority: .userInitiated) {
+                    let freshPlan = CacheCleaner.scanWithLiveSafety(
+                        home: home,
+                        sessionsRoot: sessionsRoot,
+                        profilesRoot: profilesRoot,
+                        currentSessionRoot: currentSessionRoot
+                    )
+                    let freshByPath = Dictionary(uniqueKeysWithValues: freshPlan.targets.map { ($0.id, $0) })
+                    var outcome = CleanupRunResult()
+                    for original in selected {
+                        guard let target = freshByPath[original.id], target.isSelectable else {
+                            outcome.skippedCount += 1
+                            continue
+                        }
+                        if CacheCleaner.trash(target) {
+                            outcome.movedLabels.append(target.label(english: L10n.resolvedEnglish))
+                            outcome.reclaimedBytes += target.sizeBytes
+                        } else {
+                            outcome.failedLabels.append(target.label(english: L10n.resolvedEnglish))
+                        }
+                    }
+                    return outcome
+                }.value
+            }
 
+            for label in result.movedLabels {
+                log("\(L10n.resolvedEnglish ? "Moved to Trash: " : "已移到废纸篓：")\(label)")
+            }
+            for label in result.failedLabels {
+                log("\(L10n.resolvedEnglish ? "Cleanup failed: " : "清理失败：")\(label)", attention: true)
+            }
+
+            cleanupSelection.removeAll()
+            let moved = result.movedLabels.count
+            let failed = result.failedLabels.count
+            let skipped = result.skippedCount
+            let size = ByteCountFormatter.string(fromByteCount: result.reclaimedBytes, countStyle: .file)
+
+            if includeLocalData {
+                let cleared = await clearLocalInformation()
+                cleanupIncludesLocalData = false
+                cleanupBusy = false
+                if cleared {
+                    cleanupResult = L10n.resolvedEnglish
+                        ? "Handled \(moved) cache item(s) (\(size)) and reset Routekeeper local data."
+                        : "已处理 \(moved) 项缓存（\(size)），并重置 Routekeeper 本地信息。"
+                } else {
+                    cleanupResult = L10n.resolvedEnglish
+                        ? "Handled \(moved) cache item(s), but local data was not fully reset: \(notice)"
+                        : "已处理 \(moved) 项缓存，但本地信息未能完全重置：\(notice)"
+                }
+                log(cleanupResult, attention: !cleared)
+                return
+            }
+
+            if !selected.isEmpty {
+                cleanupPlan = await Task.detached(priority: .utility) {
+                    CacheCleaner.scanWithLiveSafety(
+                        home: home,
+                        sessionsRoot: sessionsRoot,
+                        profilesRoot: profilesRoot,
+                        currentSessionRoot: currentSessionRoot
+                    )
+                }.value
+            }
+            cleanupBusy = false
+
+            if L10n.resolvedEnglish {
+                cleanupResult = "Moved \(moved) items to Trash (\(size)); skipped \(skipped), failed \(failed). Running Claude or protected state is never cleaned."
+            } else {
+                cleanupResult = "已把 \(moved) 项移到废纸篓（\(size)）；跳过 \(skipped) 项，失败 \(failed) 项。运行中的 Claude 与受保护状态不会被清理。"
+            }
+        }
     }
 
     private static func normalizedEgressInterval(_ value: Int) -> Int {

@@ -70,7 +70,7 @@ public enum Diagnostics {
         async let claudeTrace = ExternalExitChecks.claudeTrace(proxy: proxy)
         let local = await Task.detached(priority: .utility) { () -> (ProxyIdentification, String?, [String], ProcessScan) in
             let adapter = ProxyAdapters.identify(settings.proxyClient)
-            let desktop = ApplicationDiscovery.path(bundleID: ApplicationDiscovery.desktopID, name: "Claude")
+            let desktop = ClaudeDesktopDiscovery.locate()?.appURL.path
             let code = ApplicationDiscovery.codePaths()
             return (adapter, desktop, code, LocalProcesses.scan(desktopRoots: desktop.map { [$0] } ?? []))
         }.value

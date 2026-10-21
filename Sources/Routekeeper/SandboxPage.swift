@@ -2,14 +2,44 @@ import AppKit
 import GuardCore
 import SwiftUI
 
+enum SandboxPageMode {
+    case management
+    case networkCheck
+}
+
+enum SandboxSection: String, CaseIterable, Identifiable {
+    case overview, scope, network, diagnostics
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview: return L10n.resolvedEnglish ? "Overview" : "概览"
+        case .scope: return L10n.resolvedEnglish ? "Scope" : "范围"
+        case .network: return L10n.resolvedEnglish ? "Network" : "网络"
+        case .diagnostics: return L10n.resolvedEnglish ? "Diagnostics" : "诊断"
+        }
+    }
+}
+
 struct SandboxPage: View {
     @Bindable var store: GuardStore
     @Bindable var session: SandboxSession
+    let mode: SandboxPageMode
+    @Binding private var section: SandboxSection
     @State private var showAllChecks = false
+    @State private var claudeLoginLink = ""
+    @State private var handoffPreview: HandoffActionItem?
 
-    init(store: GuardStore) {
+    init(
+        store: GuardStore,
+        mode: SandboxPageMode = .management,
+        section: Binding<SandboxSection>? = nil
+    ) {
         self.store = store
         self.session = store.sandbox
+        self.mode = mode
+        _section = section ?? .constant(.overview)
     }
 
     private func text(_ zh: String, _ en: String) -> String {
@@ -18,33 +48,130 @@ struct SandboxPage: View {
 
     var body: some View {
         VStack(spacing: 16) {
+            sandboxModeCard
             if store.settings.experimentalSandboxEnabled {
-                statusCard
-                setupGuideCard
-                configurationCard
-                proxyConfigurationCard
-                boundaryCard
-                gatewayReferenceCard
-                if !session.checks.isEmpty { checksCard }
-                controlsCard
-                if session.phase == .ended || !session.changedFiles.isEmpty { reviewCard }
+                switch mode {
+                case .management:
+                    sandboxSectionPicker
+                    managementContent
+                case .networkCheck:
+                    networkCheckContent
+                }
             } else {
-                disabledCard
+                sandboxDisabledCard
             }
         }
         .onAppear { session.refreshDetectedProxy() }
         .onChange(of: session.phase) { _, phase in
             if phase != .failed { showAllChecks = false }
         }
+        .onChange(of: store.settings.experimentalSandboxEnabled) { _, enabled in
+            if !enabled { section = .overview }
+        }
+        .sheet(item: $handoffPreview) { item in
+            handoffPreviewSheet(item)
+        }
+    }
+
+    @ViewBuilder
+    private var managementContent: some View {
+        switch section {
+        case .overview:
+            statusCard
+            setupGuideCard
+            controlsCard
+        case .scope:
+            configurationCard
+        case .network:
+            proxyConfigurationCard
+            boundaryCard
+            if !hasSavedExit { sandboxExitCard }
+            gatewayReferenceCard
+        case .diagnostics:
+            if session.checks.isEmpty {
+                diagnosticsEmptyCard
+            } else {
+                checksCard
+            }
+            if session.configuration.target == .claudeDesktop,
+               session.desktopInstallation?.runtimeFamily == .electron,
+               session.phase == .running || session.phase == .networkPaused {
+                claudeLoginCallbackCard
+            }
+            if session.phase.isActive || session.phase == .ended
+                || !session.externalActions.items.isEmpty {
+                authorizationHandoffCard
+            }
+            if session.phase == .ended || !session.changedFiles.isEmpty { reviewCard }
+        }
+    }
+
+    private var diagnosticsEmptyCard: some View {
+        GuardCard(
+            title: text("尚无诊断结果", "No diagnostics yet"),
+            subtitle: text("创建会话后显示启动检查与运行记录。",
+                           "Start a session to collect preflight checks and run records.")
+        ) {
+            Label(
+                text("当前没有检查结果或待处理请求。",
+                     "There are no check results or pending requests."),
+                systemImage: "stethoscope"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var sandboxSectionPicker: some View {
+        HStack(spacing: 12) {
+            Picker("", selection: $section) {
+                ForEach(SandboxSection.allCases) { item in
+                    Text(item.title).tag(item)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 440)
+            .accessibilityIdentifier("sandbox-section-picker")
+
+            Spacer()
+
+            if session.phase.isActive {
+                Label(
+                    text("设置已锁定", "Settings locked"),
+                    systemImage: "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder
+    private var networkCheckContent: some View {
+        statusCard
+        setupGuideCard
+        proxyConfigurationCard
+        if !hasSavedExit { sandboxExitCard }
+        if !session.checks.isEmpty { checksCard }
+        controlsCard
+        sandboxManagementLinkCard
     }
 
     private var statusCard: some View {
-        GuardCard(
+        let desktop = session.configuration.target == .claudeDesktop
+        return GuardCard(
             title: text("实验性进程沙箱", "Experimental process sandbox"),
-            subtitle: text(
-                "受限的 Claude Code 只能访问本次工作副本、交换文件夹和经 Routekeeper 中继的网络。",
-                "The restricted Claude Code process can access only this workspace copy, the exchange folder and network traffic through the Routekeeper relay."
-            )
+            subtitle: desktop
+                ? text(
+                    "Claude Desktop 仅访问工作副本、交换目录和经中继的网络。",
+                    "Claude Desktop can access only the workspace, exchange folder and relayed network."
+                )
+                : text(
+                    "Claude Code 仅访问工作副本、交换目录和经中继的网络。",
+                    "Claude Code can access only the workspace, exchange folder and relayed network."
+                )
         ) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: session.statusSymbol)
@@ -64,7 +191,7 @@ struct SandboxPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                if session.busy {
+                if session.busy || session.networkValidationInProgress {
                     ProgressView().controlSize(.small)
                 }
             }
@@ -93,16 +220,67 @@ struct SandboxPage: View {
     private var configurationCard: some View {
         GuardCard(
             title: text("会话范围", "Session scope"),
-            subtitle: text(
-                "原项目只用于复制，沙箱只会修改本次工作副本。交换文件夹用于有意传递文件。",
-                "The original project is copied. The sandbox changes only this workspace copy. Use the exchange folder to pass files intentionally."
-            )
+            subtitle: session.configuration.target == .claudeDesktop
+                ? text("Chat 只需交换目录；使用 Code 时可选择项目。",
+                       "Chat needs only an exchange folder; add a project for Code.")
+                : text("原项目只读复制，修改留在工作副本中。",
+                       "The original project is copied; changes stay in the workspace.")
         ) {
             VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 14) {
+                    Text(text("运行目标", "Application"))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 116, alignment: .leading)
+                    Picker("", selection: $session.configuration.target) {
+                        ForEach(IsolationApplicationTarget.allCases, id: \.self) { target in
+                            Text(target.title).tag(target)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
+                    Spacer()
+                }
+
+                desktopInstallationRow
+                if session.configuration.target == .claudeDesktop {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Toggle(
+                                text("保留 Claude Desktop 登录状态", "Keep Claude Desktop signed in"),
+                                isOn: $session.configuration.persistClaudeLogin
+                            )
+                            .toggleStyle(.switch)
+                            Spacer()
+                            if session.persistedClaudeProfileAvailable {
+                                Button(role: .destructive) {
+                                    _ = session.clearClaudeLoginState()
+                                } label: {
+                                    Label(text("清除登录数据", "Clear sign-in data"), systemImage: "key.slash")
+                                }
+                                .routekeeperSecondaryButton()
+                                .disabled(session.busy || session.phase.isActive || session.claudeRunning)
+                            }
+                        }
+                        Text(text(
+                            "登录状态仅保存在 Routekeeper 专属目录，可随时清除。",
+                            "Sign-in state stays in a Routekeeper-owned folder and can be cleared at any time."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                }
+
                 folderRow(
-                    title: text("项目文件夹", "Project folder"),
+                    title: session.configuration.target == .claudeDesktop
+                        ? text("项目文件夹（可选）", "Project folder (optional)")
+                        : text("项目文件夹", "Project folder"),
                     value: $session.configuration.projectPath,
-                    placeholder: text("选择要复制的项目", "Choose a project to copy")
+                    placeholder: session.configuration.target == .claudeDesktop
+                        ? text("可选：选择供 Code 使用的项目", "Optional: choose a project for Code")
+                        : text("选择要复制的项目", "Choose a project to copy")
                 )
                 folderRow(
                     title: text("交换文件夹", "Exchange folder"),
@@ -136,25 +314,127 @@ struct SandboxPage: View {
                     Spacer()
                 }
                 Text(text(
-                    "时区、语言和 locale 只用于本次会话，并尽量保持一致；不会修改这台 Mac 的系统设置，也不能伪装硬件销售地区。",
-                    "Timezone, language and locale apply only to this session and are kept consistent. The Mac's settings and hardware sales region are not changed."
+                    "时区和语言只用于本次会话，不修改系统设置。",
+                    "Timezone and language apply only to this session."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                if session.configuration.target == .claudeDesktop {
+                    Text(text(
+                        "系统浏览器登录可能失败；沙箱不会因此开放直连。",
+                        "System-browser sign-in may fail; the sandbox will not open direct access for it."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .disabled(!session.phase.canChangeConfiguration)
         }
+    }
+
+    @ViewBuilder
+    private var desktopInstallationRow: some View {
+        if session.configuration.target == .claudeDesktop {
+            let installation = session.desktopInstallation
+            let supported = installation?.supportsIsolatedLaunch == true
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: supported ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(supported ? appAccent : Color.orange)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(
+                        installation?.runtimeFamily == .electron
+                            && session.desktopAppRunningOutsideSandbox
+                            && !session.claudeRunning
+                            ? text("Claude Desktop 当前正在运行", "Claude Desktop is currently running")
+                            : installation == nil
+                                ? text("未找到已验证签名的官方 Claude Desktop", "Verified official Claude Desktop not found")
+                                : !supported
+                                    ? text("官方客户端缺少可隔离启动的窗口或 daemon", "The official app has no isolatable window or daemon")
+                                    : text("已验证官方 Claude Desktop", "Official Claude Desktop verified")
+                    )
+                    .font(.callout.weight(.medium))
+                    if installation?.runtimeFamily == .electron,
+                       session.desktopAppRunningOutsideSandbox,
+                       !session.claudeRunning {
+                        Text(text(
+                            "请先完全退出 Claude Desktop 及其菜单栏进程，再点“重新检测”。否则单实例机制可能只激活沙箱外实例。",
+                            "Fully quit Claude Desktop and its menu-bar process first, then choose Detect again. Otherwise its single-instance behavior may only activate the instance outside the sandbox."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let installation {
+                        Text(desktopInstallationDetail(installation))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        if !installation.supportsIsolatedLaunch {
+                            Text(text(
+                                "这个安装包既没有内嵌窗口，也没有通过签名校验的本地 Web daemon。Routekeeper 会拒绝回退到沙箱外浏览器。",
+                                "This package has neither a bundled window nor a signed local web daemon. Routekeeper refuses the outside-browser fallback."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        } else if installation.runtimeFamily == .operonHostedWeb {
+                            Text(text(
+                                "官方 Science 包本身不含 Shell。Routekeeper 会在外层沙箱中启动已签名的 claude-science daemon，并用只允许两个回环端口的受控窗口承载官方 Web UI。",
+                                "The official Science package has no shell. Routekeeper runs the signed claude-science daemon inside the outer sandbox and hosts the official web UI in a controlled window limited to its two loopback ports."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text(text(
+                            "请从 Anthropic 官方渠道安装。Routekeeper 只检测并隔离启动已安装的客户端，不捆绑、不静默安装，也不会复制应用或登录数据。",
+                            "Install from Anthropic’s official channel. Routekeeper only detects and launches an installed client; it does not bundle, silently install, or copy the app or sign-in data."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+                Button(text("重新检测", "Detect again")) {
+                    session.refreshDesktopDiscovery()
+                }
+                .routekeeperSecondaryButton()
+                if installation == nil || !supported {
+                    Button(text("获取官方客户端", "Get official app")) {
+                        if let url = URL(string: "https://claude.ai/download") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .routekeeperSecondaryButton()
+                }
+            }
+            .padding(10)
+            .background(
+                (supported ? appAccent : Color.orange).opacity(0.055),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
+        }
+    }
+
+    private func desktopInstallationDetail(_ installation: ClaudeDesktopInstallation) -> String {
+        let version = installation.shortVersion.map { " · \($0)" } ?? ""
+        let team = installation.teamIdentifier.map { " · Team \($0)" } ?? ""
+        let family = installation.runtimeFamily == .electron
+            ? "Electron"
+            : "signed daemon + Routekeeper window"
+        return "\(installation.displayName) · \(installation.bundleIdentifier) · \(family)\n\(installation.appURL.path)\(version)\(team)"
     }
 
     private var setupGuideCard: some View {
         let steps = setupGuideSteps
         return GuardCard(
             title: text("安全启动向导", "Safe-start guide"),
-            subtitle: text(
-                "按顺序完成四步。Routekeeper 会自动读取系统代理，并在启动前核对你保存的出口。",
-                "Complete four steps in order. Routekeeper detects the system proxy and verifies your saved exit before launch."
-            )
+            subtitle: text("完成检查后再启动应用。", "Complete the checks before launch.")
         ) {
             HStack(alignment: .top, spacing: 8) {
                 ForEach(steps) { step in
@@ -232,10 +512,8 @@ struct SandboxPage: View {
         let color = consistent ? appAccent : hasDetectedProxy ? Color.orange : Color.secondary
         return GuardCard(
             title: text("代理配置一致性", "Proxy configuration consistency"),
-            subtitle: text(
-                "创建会话时自动读取当前系统代理。能识别时，地址、端口和协议会自动对齐。",
-                "The current system proxy is read when the session is created. Address, port and protocol align automatically when they can be detected."
-            )
+            subtitle: text("创建会话时自动对齐系统代理。",
+                           "Aligns with the system proxy when a session starts.")
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 11) {
@@ -254,7 +532,7 @@ struct SandboxPage: View {
                     Button(text("重新检测", "Detect again")) {
                         session.refreshDetectedProxy()
                     }
-                    .buttonStyle(.bordered)
+                    .routekeeperSecondaryButton()
                     .disabled(!session.phase.canChangeConfiguration)
                 }
                 if !session.proxyDetectionMessage.isEmpty {
@@ -262,13 +540,25 @@ struct SandboxPage: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if let exit = session.expectedExits.ipv4 ?? session.expectedExits.ipv6 {
+                let exitAnchors = [session.expectedExits.ipv4, session.expectedExits.ipv6]
+                    .compactMap { $0 }
+                if !exitAnchors.isEmpty {
                     Label(
-                        text("用于核对 Claude 出口：\(exit)", "Claude exit to verify: \(exit)"),
+                        text("用于核对 Claude 出口：\(exitAnchors.joined(separator: " / "))",
+                             "Claude exit anchors: \(exitAnchors.joined(separator: " / "))"),
                         systemImage: "target"
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                }
+                if session.expectedExits.ipv4 != nil {
+                    Text(text(
+                        "若 Claude 经代理节点显示轮换 IPv6，预检会用同一中继的稳定 IPv4 出口核对，并记录本次 IPv6 证据，不会声称两者字面相同。",
+                        "If the proxy node presents a rotating IPv6 address to Claude, preflight verifies the same relay’s stable IPv4 exit and records the observed IPv6 as evidence; it does not claim the addresses are literally equal."
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -279,10 +569,8 @@ struct SandboxPage: View {
         let passed = failedChecks.isEmpty
         return GuardCard(
             title: text("启动前检查", "Preflight checks"),
-            subtitle: text(
-                "全部项目通过后才会显示“沙箱已隔离”。失败时不会启动普通、无限制的 Claude 进程。",
-                "“Sandbox isolated” appears only after every check passes. On failure, Routekeeper does not fall back to an unrestricted launch."
-            )
+            subtitle: text("全部通过后才允许启动。",
+                           "Launch is allowed only after every check passes.")
         ) {
             VStack(spacing: 0) {
                 HStack(spacing: 11) {
@@ -360,12 +648,12 @@ struct SandboxPage: View {
     }
 
     private var controlsCard: some View {
-        GuardCard(
+        let desktop = session.configuration.target == .claudeDesktop
+        return GuardCard(
             title: text("会话操作", "Session actions"),
-            subtitle: text(
-                "先验证隔离边界，再从 Keychain 读取凭证，在终端中启动 Claude Code。",
-                "Verify the isolation boundary first, then launch Claude Code in Terminal with the Keychain credential."
-            )
+            subtitle: desktop
+                ? text("验证边界后启动官方客户端。", "Verify the boundary, then launch the official app.")
+                : text("验证边界后从钥匙串启动。", "Verify the boundary, then launch with the Keychain token.")
         ) {
             HStack(spacing: 10) {
                 Button {
@@ -392,7 +680,14 @@ struct SandboxPage: View {
                     .disabled(!session.canResumeNetwork)
                 }
                 Spacer()
-                if session.busy { ProgressView().controlSize(.small) }
+                if session.busy || session.networkValidationInProgress {
+                    ProgressView().controlSize(.small)
+                    if session.networkValidationInProgress {
+                        Text(text("稳定后复检", "Revalidating"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if session.phase == .running || session.phase == .networkPaused {
@@ -401,10 +696,24 @@ struct SandboxPage: View {
                     Button {
                         store.launchClaudeInSandbox()
                     } label: {
-                        Label(text("在终端启动 Claude Code", "Launch Claude Code in Terminal"), systemImage: "play.fill")
+                        Label(
+                            desktop
+                                ? (session.desktopInstallation?.runtimeFamily == .operonHostedWeb
+                                    ? text("启动 Claude Science（隔离窗口）", "Launch Claude Science in isolated window")
+                                    : text("启动官方 Claude Desktop", "Launch official Claude Desktop"))
+                                : text("在终端启动 Claude Code", "Launch Claude Code in Terminal"),
+                            systemImage: "play.fill"
+                        )
                     }
                     .routekeeperProminentButton()
-                    .disabled(!session.canLaunchClaude || store.authentication.status != .saved)
+                    .disabled(
+                        !session.canLaunchClaude
+                            || (desktop
+                                ? !session.desktopIsolationSupported
+                                    || (session.desktopInstallation?.runtimeFamily == .electron
+                                        && session.desktopAppRunningOutsideSandbox)
+                                : store.authentication.status != .saved)
+                    )
 
                     Button(role: .destructive) {
                         Task { await store.endSandboxSession() }
@@ -414,7 +723,7 @@ struct SandboxPage: View {
                     .disabled(session.busy)
                     Spacer()
                 }
-                if store.authentication.status != .saved {
+                if !desktop, store.authentication.status != .saved {
                     Label(
                         text(
                             "尚未保存 Claude Code 登录凭证。请先在“保护 → Claude Code 登录凭证”中保存。",
@@ -442,6 +751,82 @@ struct SandboxPage: View {
                     }
                     Spacer()
                 }
+            }
+        }
+    }
+
+    private var claudeLoginCallbackCard: some View {
+        let canSubmit = session.phase == .running
+            && session.networkEnabled
+            && session.claudeRunning
+            && session.claudeLoginCallbackStatus != .waiting
+        return GuardCard(
+            title: text("邮件登录回调", "Email sign-in callback"),
+            subtitle: text(
+                "不要直接点击邮件里的登录按钮。请右键点击“Sign in”并选择“复制链接地址”，再粘贴到这里，由 Routekeeper 交给沙箱中的 Claude。",
+                "Do not click the sign-in button in the email. Right-click “Sign in”, choose “Copy Link Address”, and paste it here so Routekeeper can hand it to the sandboxed Claude instance."
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                Label(
+                    text(
+                        "直接在默认浏览器打开会让 claude.ai 看到沙箱外的出口，并可能激活另一个 Claude 实例。Routekeeper 不读取邮箱、不访问该链接，也不会保存或记录链接中的一次性凭证。",
+                        "Opening the link in the default browser exposes a network path outside the sandbox to claude.ai and may activate another Claude instance. Routekeeper does not read your mailbox, fetch the link, or save or log its one-time credential."
+                    ),
+                    systemImage: "exclamationmark.shield.fill"
+                )
+                .font(.callout)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    SecureField(
+                        text(
+                            "粘贴邮件中的 claude.ai/magic-link 链接",
+                            "Paste the claude.ai/magic-link URL from the email"
+                        ),
+                        text: $claudeLoginLink
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("claude-login-link-input")
+
+                    Button(text("交给沙箱 Claude", "Send to sandboxed Claude")) {
+                        if session.submitClaudeLoginLink(claudeLoginLink) {
+                            claudeLoginLink = ""
+                        }
+                    }
+                    .routekeeperProminentButton()
+                    .disabled(
+                        !canSubmit
+                            || claudeLoginLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("claude-login-link-submit")
+
+                    if !claudeLoginLink.isEmpty {
+                        Button(text("清除", "Clear")) {
+                            claudeLoginLink = ""
+                        }
+                        .routekeeperSecondaryButton()
+                    }
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    switch session.claudeLoginCallbackStatus {
+                    case .waiting:
+                        ProgressView().controlSize(.small)
+                    case .delivered:
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(appAccent)
+                    case .invalid, .failed:
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.orange)
+                    case .idle:
+                        Image(systemName: "key.horizontal").foregroundStyle(Color.secondary)
+                    }
+                    Text(session.claudeLoginCallbackMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityIdentifier("claude-login-link-status")
             }
         }
     }
@@ -477,10 +862,10 @@ struct SandboxPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button(text("查看网关证据", "View gateway evidence")) {
-                    AppNavigationRequest.request(.inspection)
+                Button(text("网络保护", "Network protection")) {
+                    AppNavigationRequest.request(.protection, protectionSection: .networkSettings)
                 }
-                .buttonStyle(.bordered)
+                .routekeeperSecondaryButton()
             }
         }
     }
@@ -495,6 +880,369 @@ struct SandboxPage: View {
         case .failed: return text("代理网关检查未通过", "Gateway verification failed")
         case .expired: return text("代理网关证据已过期", "Gateway evidence expired")
         }
+    }
+
+    private var authorizationHandoffCard: some View {
+        GuardCard(
+            title: text("授权隔离", "Authorization handoff"),
+            subtitle: text(
+                "Claude 只能提交操作请求，不能读取 Git、Notion 或其他外部服务的凭据。只有经你确认后，宿主侧才会保存交付文件或应用补丁。",
+                "Claude can submit an operation request but cannot read credentials for Git, Notion or other external services. The host acts only after your approval."
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "person.badge.key")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(appAccent)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            appAccent.opacity(0.10),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(text("交接目录", "Handoff directory"))
+                            .font(.callout.weight(.semibold))
+                        Text(".routekeeper-actions")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text(session.externalActions.message)
+                            .font(.caption)
+                            .foregroundStyle(
+                                session.externalActions.pendingCount > 0
+                                    ? Color.orange
+                                    : Color.secondary
+                            )
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button(text("复制请求格式", "Copy request format")) {
+                        copyHandoffInstructions()
+                    }
+                    .routekeeperSecondaryButton()
+                    Button(text("打开目录", "Open folder")) {
+                        session.externalActions.openDirectory()
+                    }
+                    .routekeeperSecondaryButton()
+                    .disabled(session.externalActions.directoryURL == nil)
+                }
+
+                if session.externalActions.items.isEmpty {
+                    Label(
+                        text(
+                            "尚未收到请求。Claude 需要外部操作时，只能把 JSON 清单和交付文件写入该目录。",
+                            "No requests yet. When Claude needs an external operation, it can only write a JSON manifest and payload into this directory."
+                        ),
+                        systemImage: "tray"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(Array(session.externalActions.items.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { AppHairline() }
+                        handoffActionRow(item)
+                    }
+                }
+
+                if !session.externalActions.issues.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label(
+                            text("已拒绝的请求", "Rejected requests"),
+                            systemImage: "exclamationmark.shield"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.orange)
+                        ForEach(session.externalActions.issues.prefix(4)) { issue in
+                            Text("\(issue.manifestName)：\(issue.message)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if session.externalActions.issues.count > 4 {
+                            Text(text(
+                                "另有 \(session.externalActions.issues.count - 4) 条无效请求未显示。",
+                                "\(session.externalActions.issues.count - 4) more invalid request(s) hidden."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func handoffActionRow(_ item: HandoffActionItem) -> some View {
+        let request = item.package.request
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: request.kind == .applyGitPatch ? "arrow.down.doc" : "doc.badge.arrow.up")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(appAccent)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        appAccent.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(request.title)
+                            .font(.callout.weight(.semibold))
+                        Text(handoffKindLabel(request.kind))
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.primary.opacity(0.055), in: Capsule())
+                    }
+                    if !request.summary.isEmpty {
+                        Text(request.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(
+                        "\(request.suggestedName) · \(handoffByteCount(item.package.payloadBytes)) · SHA256 \(item.package.payloadSHA256.prefix(12))"
+                    )
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                handoffStateBadge(item.state)
+            }
+
+            if let detail = handoffStateDetail(item.state) {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(handoffStateColor(item.state))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 43)
+            }
+
+            HStack(spacing: 8) {
+                Button(text("查看内容", "Inspect")) {
+                    handoffPreview = item
+                }
+                .routekeeperSecondaryButton()
+
+                if request.kind == .exportFile {
+                    Button(text("保存到…", "Save to…")) {
+                        chooseHandoffDestination(item)
+                    }
+                    .routekeeperProminentButton()
+                    .disabled(!item.state.isActionable)
+                } else {
+                    Button(text("应用到 Git 仓库…", "Apply to Git repository…")) {
+                        chooseGitRepository(item)
+                    }
+                    .routekeeperProminentButton()
+                    .disabled(!item.state.isActionable)
+                    Button(text("另存补丁…", "Save patch…")) {
+                        choosePatchDestination(item)
+                    }
+                    .routekeeperSecondaryButton()
+                    .disabled(!item.state.isActionable)
+                }
+
+                if item.state.isActionable {
+                    Button(text("拒绝", "Reject"), role: .destructive) {
+                        session.externalActions.reject(item)
+                    }
+                    .routekeeperSecondaryButton()
+                }
+                if case .running = item.state {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer()
+            }
+            .padding(.leading, 43)
+        }
+    }
+
+    private func handoffStateBadge(_ state: HandoffApprovalState) -> some View {
+        Text(handoffStateTitle(state))
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(handoffStateColor(state))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(handoffStateColor(state).opacity(0.10), in: Capsule())
+    }
+
+    private func handoffStateTitle(_ state: HandoffApprovalState) -> String {
+        switch state {
+        case .pending: return text("待确认", "Pending")
+        case .running: return text("执行中", "Running")
+        case .completed: return text("已完成", "Completed")
+        case .failed: return text("失败", "Failed")
+        case .rejected: return text("已拒绝", "Rejected")
+        }
+    }
+
+    private func handoffStateDetail(_ state: HandoffApprovalState) -> String? {
+        switch state {
+        case .completed(let message), .failed(let message): return message
+        case .pending, .running, .rejected: return nil
+        }
+    }
+
+    private func handoffStateColor(_ state: HandoffApprovalState) -> Color {
+        switch state {
+        case .pending: return .orange
+        case .running: return appAccent
+        case .completed: return .green
+        case .failed: return .orange
+        case .rejected: return .secondary
+        }
+    }
+
+    private func handoffKindLabel(_ kind: HandoffActionKind) -> String {
+        switch kind {
+        case .exportFile: return text("文件交付", "File handoff")
+        case .applyGitPatch: return text("Git 补丁", "Git patch")
+        }
+    }
+
+    private func handoffByteCount(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    private func chooseHandoffDestination(_ item: HandoffActionItem) {
+        let panel = NSSavePanel()
+        panel.title = text("保存交付文件", "Save handoff file")
+        panel.prompt = text("保存", "Save")
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = item.package.request.suggestedName
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        session.externalActions.export(item, to: destination)
+        store.log(text("已提交宿主侧文件保存。", "Requested a host-side file save."))
+    }
+
+    private func choosePatchDestination(_ item: HandoffActionItem) {
+        let panel = NSSavePanel()
+        panel.title = text("保存审阅后的补丁", "Save reviewed patch")
+        panel.prompt = text("保存", "Save")
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = item.package.request.suggestedName
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            try item.package.payloadData.write(to: destination, options: .atomic)
+            session.externalActions.message = text(
+                "补丁已保存；不会自动提交或推送。",
+                "The patch was saved; nothing was committed or pushed."
+            )
+            store.log(session.externalActions.message)
+        } catch {
+            session.externalActions.message = "保存补丁失败：\(error.localizedDescription)"
+            store.log(session.externalActions.message, attention: true)
+        }
+    }
+
+    private func chooseGitRepository(_ item: HandoffActionItem) {
+        let panel = NSOpenPanel()
+        panel.title = text("选择要应用补丁的 Git 仓库", "Choose the Git repository")
+        panel.prompt = text("应用补丁", "Apply patch")
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let repository = panel.url else { return }
+        session.externalActions.applyGitPatch(item, repository: repository)
+        store.log(text(
+            "已提交宿主侧 Git 补丁应用；不会自动提交或推送。",
+            "Requested host-side Git patch application; no commit or push will be performed."
+        ))
+    }
+
+    private func copyHandoffInstructions() {
+        let instructions = text(
+            """
+            如果本次任务需要外部操作，只能在 $ISOLATION_EXCHANGE/.routekeeper-actions 中写入请求，不要索取或输出任何密码、token、Cookie、真实账户链接或本地绝对路径。每个请求使用一个 JSON 清单和一个同目录交付文件：
+
+            {
+              "schemaVersion": 1,
+              "requestID": "生成一个 UUID",
+              "kind": "file.export",
+              "title": "简短标题",
+              "summary": "说明操作内容和包含的数据",
+              "payload": "result.md",
+              "suggestedName": "result.md"
+            }
+
+            可用 kind：
+            - file.export：由用户在宿主侧选择位置保存交付文件。
+            - git.applyPatch：payload 必须是 .patch 或 .diff，由用户在宿主侧选择仓库并应用；不会自动提交或推送。
+
+            写入后停止外部操作，等待用户在 Routekeeper 中确认。
+            """,
+            """
+            If this task needs an external operation, write the request only under $ISOLATION_EXCHANGE/.routekeeper-actions. Never request or output passwords, tokens, cookies, real account URLs or absolute local paths. Use one JSON manifest and one payload in the same directory:
+
+            {
+              "schemaVersion": 1,
+              "requestID": "generate a UUID",
+              "kind": "file.export",
+              "title": "Short title",
+              "summary": "Describe the operation and included data",
+              "payload": "result.md",
+              "suggestedName": "result.md"
+            }
+
+            Supported kinds:
+            - file.export: the user chooses a host location for the payload.
+            - git.applyPatch: payload must be .patch or .diff; the user chooses a host repository. Routekeeper never commits or pushes.
+
+            After writing the request, stop external operations and wait for approval in Routekeeper.
+            """
+        )
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(instructions, forType: .string)
+        store.notice = text("已复制授权隔离请求格式。", "Copied the authorization-handoff request format.")
+    }
+
+    private func handoffPreviewSheet(_ item: HandoffActionItem) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.package.request.title)
+                        .font(.title3.weight(.semibold))
+                    Text(item.package.request.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(text("关闭", "Close")) { handoffPreview = nil }
+            }
+            AppHairline()
+            ScrollView {
+                Text(handoffPreviewText(item.package))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .background(
+                Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+        .padding(18)
+        .frame(minWidth: 720, minHeight: 480)
+    }
+
+    private func handoffPreviewText(_ package: HandoffActionPackage) -> String {
+        let prefix = package.payloadData.prefix(256 * 1024)
+        guard let text = String(data: prefix, encoding: .utf8) else {
+            return text(
+                "二进制交付文件 · \(handoffByteCount(package.payloadBytes))",
+                "Binary payload · \(handoffByteCount(package.payloadBytes))"
+            )
+        }
+        if package.payloadBytes > prefix.count {
+            return text + "\n\n[预览已截断]"
+        }
+        return text
     }
 
     private var reviewCard: some View {
@@ -593,23 +1341,30 @@ struct SandboxPage: View {
                         .textFieldStyle(.roundedBorder)
                 }
                 Text(text(
-                    "上游地址固定为本机回环地址。上游代理密码只在本次运行中使用，写入设置时会清空，不会保存到偏好设置。",
-                    "The upstream address is always loopback. The upstream password is used only for this run and is stripped before preferences are saved."
+                    "上游地址固定为本机；密码只用于本次运行。",
+                    "The upstream is always local; the password is used only for this run."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 Text(text(
-                    "这是进程与文件隔离功能：网络只允许经过中继，不等同于完整的虚拟机，也不能保证账号、设备指纹或服务端风控结果。",
-                    "This isolates processes and files: network traffic must pass through the relay. It is not a full virtual machine and cannot guarantee account, device-fingerprint or server-side risk outcomes."
+                    "这是进程隔离，不是虚拟机；Claude 仍能读取本机网络配置。",
+                    "This is process isolation, not a virtual machine; Claude can still read host network configuration."
                 ))
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-                Text(text(
-                    "为避免绕过，沙箱不允许启动 localhost 项目服务器，也不允许自动打开默认浏览器。如需预览生成的项目，请结束会话后打开工作副本；如需重新登录，请优先在“Claude Code 登录凭证”中保存令牌。外部浏览器不受沙箱网络限制。",
-                    "To prevent bypasses, sandboxed processes cannot start localhost project servers or open the default browser. To preview generated work, end the session and open the workspace copy. For sign-in, save a token under Claude Code sign-in first. External browsers are outside the sandbox network boundary."
-                ))
+                Text(
+                    session.configuration.target == .claudeDesktop
+                        ? text(
+                            "Chat 与派生的 helper 应继承同一沙箱边界；Code 模式依赖的本地服务仍以启动检查结果为准。",
+                            "Chat and spawned helpers inherit the same boundary; Code-mode local services remain subject to preflight."
+                        )
+                        : text(
+                            "沙箱不允许 localhost 服务器或默认浏览器；请结束会话后预览工作副本。",
+                            "Localhost servers and the default browser are blocked; preview the workspace after ending the session."
+                        )
+                )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -618,21 +1373,124 @@ struct SandboxPage: View {
         }
     }
 
-    private var disabledCard: some View {
+    private var sandboxModeCard: some View {
         GuardCard(
-            title: text("实验性进程沙箱", "Experimental process sandbox"),
-            subtitle: text(
-                "这是一个可选模式。开启后，普通网络监控会让出状态显示，避免把两套网络状态混在一起。",
-                "This optional mode gives the sandbox priority in status reporting so two different network models never appear as one."
-            )
+            title: text("独立沙箱", "Standalone sandbox"),
+            subtitle: text("将 Claude 放入受限进程环境。",
+                           "Run Claude inside a restricted process boundary.")
         ) {
-            Text(text(
-                "请在“保护 → 保护设置”中开启“实验性进程沙箱”。Claude Code 自己的权限提示和内部沙箱仍应保持启用。",
-                "Turn on “Experimental process sandbox” under Protection → Protection settings. Keep Claude Code’s own permission prompts and internal sandbox enabled."
-            ))
+            HStack(alignment: .center, spacing: 12) {
+                Toggle(
+                    text("启用沙箱模式", "Enable sandbox mode"),
+                    isOn: Binding(
+                        get: { store.settings.experimentalSandboxEnabled },
+                        set: { enabled in
+                            if !enabled && store.sandbox.phase.isActive {
+                                store.notice = text(
+                                    "请先结束当前沙箱会话，再关闭沙箱模式。",
+                                    "End the active sandbox session before turning sandbox mode off."
+                                )
+                                return
+                            }
+                            store.settings.experimentalSandboxEnabled = enabled
+                        }
+                    )
+                )
+                .toggleStyle(.switch)
+                .disabled(session.phase.isActive)
+                Spacer()
+                if store.settings.experimentalSandboxEnabled {
+                    Text(session.statusTitle)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(session.phase == .failed ? Color.orange : Color.secondary)
+                }
+            }
+            if session.phase.isActive {
+                Label(
+                    text("结束当前会话后才能关闭沙箱。",
+                         "End the active session before turning the sandbox off."),
+                    systemImage: "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var sandboxDisabledCard: some View {
+        GuardCard(
+            title: text("沙箱尚未启用", "Sandbox is off"),
+            subtitle: text("启用后在这里管理会话。",
+                           "Enable it to manage sessions here.")
+        ) {
+            VStack(alignment: .leading, spacing: 9) {
+                Label(text("文件修改只保留在本次工作副本中。",
+                           "File changes remain in this session’s workspace copy."),
+                      systemImage: "folder.badge.questionmark")
+                Label(text("Claude 的网络流量只能经过 Routekeeper 中继，失败时不会回落直连。",
+                           "Claude traffic can use only the Routekeeper relay and never falls back to a direct connection."),
+                      systemImage: "network.slash")
+                Label(text("Claude Code 自己的权限提示和内部沙箱仍应保持启用。",
+                           "Keep Claude Code’s own permission prompts and internal sandbox enabled."),
+                      systemImage: "checkmark.shield")
+            }
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var sandboxExitCard: some View {
+        GuardCard(
+            title: text("获取沙箱出口", "Detect sandbox exit"),
+            subtitle: text(
+                "沙箱会先保存当前一致出口，再用它核对 Claude 经中继看到的结果。",
+                "Save the current matching exit first, then use it to verify what Claude observes through the relay."
+            )
+        ) {
+            HStack(spacing: 12) {
+                Image(systemName: "target")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                Text(text(
+                    "检测不会启动 Claude，也不会创建会话。",
+                    "Detection does not launch Claude or create a session."
+                ))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button(text("检测并保存出口", "Detect and save exit")) {
+                    Task { await store.detectExitForSandbox() }
+                }
+                .routekeeperSecondaryButton()
+                .disabled(store.checking || session.busy || session.phase.isActive)
+            }
+        }
+    }
+
+    private var sandboxManagementLinkCard: some View {
+        GuardCard(
+            title: text("会话范围", "Session scope"),
+            subtitle: text(
+                "项目、交换文件夹、运行目标与启动操作在独立沙箱页管理。",
+                "Manage projects, the exchange folder, launch target and start actions on the standalone Sandbox page."
+            )
+        ) {
+            HStack {
+                Text(session.configuration.target.title)
+                    .font(.callout.weight(.medium))
+                if !session.configuration.exchangePath.isEmpty {
+                    Text(abbreviatedPath(session.configuration.exchangePath))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button(text("打开沙箱", "Open sandbox")) {
+                    AppNavigationRequest.request(.sandbox)
+                }
+                .routekeeperSecondaryButton()
+            }
         }
     }
 
@@ -658,16 +1516,20 @@ struct SandboxPage: View {
     }
 
     private var setupGuideSteps: [SandboxGuideStepItem] {
+        let desktop = session.configuration.target == .claudeDesktop
+        let clientReady = desktop ? session.desktopIsolationSupported : store.authentication.status == .saved
         let completed = [
             proxyStepComplete,
             hasSavedExit,
-            hasSessionScope && store.authentication.status == .saved,
+            hasSessionScope && clientReady,
             preflightPassed
         ]
         let titles = [
             text("1  代理", "1  Proxy"),
             text("2  出口", "2  Exit"),
-            text("3  范围与登录", "3  Scope & sign-in"),
+            desktop
+                ? text("3  范围与客户端", "3  Scope & app")
+                : text("3  范围与登录", "3  Scope & sign-in"),
             text("4  隔离启动", "4  Isolation")
         ]
         var currentAssigned = false
@@ -714,6 +1576,25 @@ struct SandboxPage: View {
             }
             return text("体检并保存一个出口 IP。", "Run a check and save an exit IP.")
         case 2:
+            if session.configuration.target == .claudeDesktop {
+                if session.desktopInstallation?.runtimeFamily == .electron,
+                   session.desktopAppRunningOutsideSandbox,
+                   !session.claudeRunning {
+                    return text("先完全退出当前 Claude Desktop，再重新检测。", "Fully quit the running Claude Desktop, then detect it again.")
+                }
+                if !session.desktopInstalled {
+                    return text("选择交换目录，并安装官方 Claude Desktop。项目目录仅供 Code 模式按需选择。", "Choose an exchange folder and install official Claude Desktop. A project folder is optional for Code.")
+                }
+                if !session.desktopIsolationSupported {
+                    return text(
+                        "当前官方包没有可托管的窗口或签名 daemon，不能回退到沙箱外浏览器。",
+                        "The current official package has no hostable window or signed daemon and cannot fall back to an outside browser."
+                    )
+                }
+                return state == .complete
+                    ? text("交换目录、可选项目和官方客户端已就绪。", "Exchange scope, optional project and the official app are ready.")
+                    : text("选择交换目录；项目可按需选择，已检测到官方 Claude Desktop。", "Choose an exchange folder; a project is optional. Official Claude Desktop is installed.")
+            }
             return state == .complete
                 ? text("项目、交换目录和登录凭证已就绪。", "Folder scope and sign-in are ready.")
                 : text("选择两个目录并保存登录凭证。", "Choose two folders and save sign-in.")
@@ -731,14 +1612,26 @@ struct SandboxPage: View {
         if session.phase == .networkPaused { return .resumeNetwork }
         if session.phase == .preparing || session.phase == .checking { return nil }
         if session.detectedProxy?.isLoopback == false { return .detectProxy }
-        if !hasSavedExit { return .networkCheck }
-        if session.configuration.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !hasSavedExit { return .detectExit }
+        if session.configuration.target == .claudeCode,
+           session.configuration.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .chooseProject
         }
         if session.configuration.exchangePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .chooseExchange
         }
-        if store.authentication.status != .saved { return .authentication }
+        if session.configuration.target == .claudeDesktop, !session.desktopIsolationSupported {
+            return .desktopInstall
+        }
+        if session.configuration.target == .claudeDesktop,
+           session.desktopInstallation?.runtimeFamily == .electron,
+           session.desktopAppRunningOutsideSandbox,
+           !session.claudeRunning {
+            return .desktopRunning
+        }
+        if session.configuration.target == .claudeCode, store.authentication.status != .saved {
+            return .authentication
+        }
         if session.phase == .ended { return .openWorkspace }
         return .prepare
     }
@@ -755,10 +1648,10 @@ struct SandboxPage: View {
                 "系统代理不是本机入口。请在代理客户端开启本机 HTTP、SOCKS 或混合端口。",
                 "The system proxy is not a local endpoint. Enable a local HTTP, SOCKS or mixed port."
             )
-        case .networkCheck:
+        case .detectExit:
             return text(
-                "先完成网络体检并保存出口。沙箱会用这个值核对 Claude 的真实出口。",
-                "Run a network check and save an exit. The sandbox compares Claude’s actual exit with it."
+                "先检测并保存当前稳定出口。沙箱会用同一中继核对 Claude 路径；节点轮换 IPv6 时使用 IPv4 锚点。",
+                "Detect and save the current stable exit. The sandbox verifies Claude through the same relay and uses the IPv4 anchor when the node rotates IPv6."
             )
         case .chooseProject:
             return text("选择要复制的项目文件夹；原文件夹不会被直接修改。", "Choose the project to copy; the original is not edited directly.")
@@ -766,37 +1659,67 @@ struct SandboxPage: View {
             return text("选择一个单独的交换文件夹，用于有意传入或取出文件。", "Choose a separate exchange folder for intentional file transfer.")
         case .authentication:
             return text("保存 Claude Code 登录凭证，避免启动时转到沙箱外的浏览器。", "Save a Claude Code token so launch does not fall back to a browser outside the sandbox.")
+        case .desktopInstall:
+            if session.desktopInstallation?.supportsIsolatedLaunch == false {
+                return text(
+                    "当前官方安装包没有可安全托管的窗口或签名 daemon。Routekeeper 不会为了启动而降低隔离边界。",
+                    "The installed official package has no safely hostable window or signed daemon. Routekeeper will not weaken isolation just to launch it."
+                )
+            }
+            return text(
+                "从 Anthropic 官方渠道安装 Claude Desktop。安装完成后回到本页，Routekeeper 会验证应用签名。",
+                "Install Claude Desktop from Anthropic’s official channel. Return here and Routekeeper will verify the app signature."
+            )
+        case .desktopRunning:
+            return text(
+                "请先完全退出当前 Claude Desktop 及其菜单栏进程，再点“重新检测”。Routekeeper 不会接管沙箱外实例。",
+                "Fully quit the current Claude Desktop app and menu-bar process, then choose Detect again. Routekeeper will not take over an instance outside the sandbox."
+            )
         case .openWorkspace:
             return text("会话已结束。先审阅工作副本，再决定是否采用修改。", "The session ended. Review the workspace copy before applying changes.")
         case .prepare:
             return text("所需信息已齐。创建会话后会验证断网、代理、出口和进程边界。", "Inputs are ready. Creation verifies fail-closed networking, proxy, exit and process boundaries.")
         case nil:
             return session.phase == .running
-                ? text("隔离环境已通过检查。可转到下方“会话操作”启动 Claude Code。", "Isolation passed. Use Session actions below to launch Claude Code.")
+                ? (session.configuration.target == .claudeDesktop
+                    ? (session.desktopInstallation?.runtimeFamily == .operonHostedWeb
+                        ? text("隔离环境已通过检查。可转到下方“会话操作”打开 Claude Science 受控窗口。", "Isolation passed. Use Session actions below to open the controlled Claude Science window.")
+                        : text("隔离环境已通过检查。可转到下方“会话操作”启动官方 Claude Desktop。", "Isolation passed. Use Session actions below to launch official Claude Desktop."))
+                    : text("隔离环境已通过检查。可转到下方“会话操作”启动 Claude Code。", "Isolation passed. Use Session actions below to launch Claude Code."))
                 : text("正在执行检查，请等待当前步骤完成。", "A check is running. Wait for the current step to finish.")
         }
     }
 
     private var guideNextSymbol: String {
-        guideAction == .detectProxy ? "exclamationmark.triangle.fill" : "arrow.right.circle.fill"
+        guideAction == .detectProxy || guideAction == .desktopInstall || guideAction == .desktopRunning
+            ? "exclamationmark.triangle.fill"
+            : "arrow.right.circle.fill"
     }
 
     private var guideNextColor: Color {
-        guideAction == .detectProxy ? .orange : appAccent
+        guideAction == .detectProxy
+            || guideAction == .desktopInstall
+            || guideAction == .desktopRunning ? .orange : appAccent
     }
 
     private func performGuideAction(_ action: SandboxGuideAction) {
         switch action {
         case .detectProxy:
             session.refreshDetectedProxy(alignIfNeeded: true)
-        case .networkCheck:
-            AppNavigationRequest.request(.inspection)
+        case .detectExit:
+            Task { await store.detectExitForSandbox() }
         case .chooseProject:
             chooseFolder(for: $session.configuration.projectPath)
         case .chooseExchange:
             chooseFolder(for: $session.configuration.exchangePath)
         case .authentication:
             AppNavigationRequest.request(.protection, protectionSection: .authentication)
+        case .desktopInstall:
+            if let url = URL(string: "https://claude.ai/download") {
+                NSWorkspace.shared.open(url)
+            }
+        case .desktopRunning:
+            session.refreshDesktopDiscovery()
         case .prepare:
             Task { await store.prepareSandbox() }
         case .resumeNetwork:
@@ -808,6 +1731,11 @@ struct SandboxPage: View {
 
     private func sandboxRemediation(for checkID: String) -> String {
         switch checkID {
+        case "desktop-signature":
+            return text(
+                "从 Anthropic 官方渠道安装 Claude Desktop，确认应用未被修改，再点“重新检测”。Routekeeper 不接受其他 Team ID 或未签名应用。",
+                "Install Claude Desktop from Anthropic’s official channel, confirm the app is unmodified, then choose Detect again. Routekeeper rejects unsigned apps and other Team IDs."
+            )
         case "system-proxy-config", "relay-network":
             return text(
                 "重新打开代理客户端的本机 HTTP、SOCKS 或混合端口，点击“重新检测”，再创建会话。",
@@ -820,8 +1748,8 @@ struct SandboxPage: View {
             )
         case "claude-exit-match":
             return text(
-                "出口可能已变化。回到网络体检，确认并保存当前出口后再重新创建会话。",
-                "The exit may have changed. Confirm and save the current exit in Network check, then create the session again."
+                "Claude 看到的 IPv6 可能由节点轮换。请确认已保存的稳定 IPv4 仍是当前代理出口，更新后再重建会话；不要直接粘贴轮换 IPv6。",
+                "The IPv6 address seen by Claude may rotate at the node. Confirm the saved stable IPv4 is still the current proxy exit, update it, then recreate the session; do not paste a rotating IPv6 address directly."
             )
         case "timezone", "session-locale":
             return text(
@@ -854,6 +1782,11 @@ struct SandboxPage: View {
         }
     }
 
+    private func abbreviatedPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
     private func folderRow(title: String, value: Binding<String>, placeholder: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text(title)
@@ -883,10 +1816,12 @@ struct SandboxPage: View {
 
 private enum SandboxGuideAction: Equatable {
     case detectProxy
-    case networkCheck
+    case detectExit
     case chooseProject
     case chooseExchange
     case authentication
+    case desktopInstall
+    case desktopRunning
     case prepare
     case resumeNetwork
     case openWorkspace
@@ -895,10 +1830,12 @@ private enum SandboxGuideAction: Equatable {
         let en = L10n.resolvedEnglish
         switch self {
         case .detectProxy: return en ? "Detect again" : "重新检测"
-        case .networkCheck: return en ? "Open network check" : "去网络体检"
+        case .detectExit: return en ? "Detect exit" : "检测并保存出口"
         case .chooseProject: return en ? "Choose project" : "选择项目"
         case .chooseExchange: return en ? "Choose exchange" : "选择交换目录"
         case .authentication: return en ? "Save sign-in" : "保存登录凭证"
+        case .desktopInstall: return en ? "Get official app" : "获取官方客户端"
+        case .desktopRunning: return en ? "Detect again" : "重新检测"
         case .prepare: return en ? "Create isolated session" : "创建隔离会话"
         case .resumeNetwork: return en ? "Restore network" : "恢复网络"
         case .openWorkspace: return en ? "Review workspace" : "查看工作副本"
