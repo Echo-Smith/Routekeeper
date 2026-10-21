@@ -1,6 +1,13 @@
-# Routekeeper
+<p align="center">
+  <img src="docs/assets/routekeeper-icon.png" width="160" height="160" alt="Routekeeper 图标">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<h1 align="center">Routekeeper</h1>
+
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 Routekeeper 是一款原生 macOS 网络体检与监控工具。它会检查当前 IPv4 和
 IPv6 流量是否沿预期路径传输，比较预期与实际代理出口，并持续监控所选应用的
@@ -8,6 +15,17 @@ IPv6 流量是否沿预期路径传输，比较预期与实际代理出口，并
 
 当前版本为 **0.3.12**（构建号 22），面向 macOS 14 及以上系统的私有开发预览。
 应用使用 ad-hoc 签名，本地 DMG 尚未经过公证。
+
+## 下载与安装
+
+[下载 Routekeeper 0.3.12](https://github.com/Echo-Smith/Routekeeper/releases/tag/v0.3.12)
+
+1. 打开 DMG。
+2. 将 `Routekeeper.app` 拖入“应用程序”文件夹。
+3. 从“应用程序”启动 Routekeeper。
+
+当前安装包使用 ad-hoc 签名，尚未经过 Apple 公证。首次打开如被 macOS 拦截，
+请前往“系统设置 → 隐私与安全性”允许打开。当前交付包仅支持 Apple Silicon。
 
 ## 功能
 

@@ -1,6 +1,13 @@
-# Routekeeper
+<p align="center">
+  <img src="docs/assets/routekeeper-icon.png" width="160" height="160" alt="Routekeeper icon">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<h1 align="center">Routekeeper</h1>
+
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 Routekeeper is a native macOS network inspection and monitoring utility. It
 checks whether observed IPv4 and IPv6 traffic follows the expected route,
@@ -9,6 +16,18 @@ applications for network changes.
 
 Version **0.3.12** (build 22) is a private development preview for macOS 14 or
 later. The app is ad-hoc signed and the local DMG is not notarized.
+
+## Download and install
+
+[Download Routekeeper 0.3.12](https://github.com/Echo-Smith/Routekeeper/releases/tag/v0.3.12)
+
+1. Open the DMG.
+2. Drag `Routekeeper.app` into the Applications folder.
+3. Launch Routekeeper from Applications.
+
+The current package is ad-hoc signed and not notarized by Apple. If macOS blocks
+the first launch, allow it from System Settings → Privacy & Security. The
+current artifact supports Apple Silicon only.
 
 ## Features
 
