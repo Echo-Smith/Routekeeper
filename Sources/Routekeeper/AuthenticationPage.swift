@@ -24,7 +24,7 @@ struct AuthenticationPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             GuardCard(
-                title: text("Claude Code 登录凭证", "Claude Code sign-in"),
+                title: text("当前状态", "Current status"),
                 subtitle: text(
                     "保存后重复使用；只有凭证失效时才重新获取。",
                     "Reuse the saved credential; acquire a new one only when it expires."
@@ -39,12 +39,13 @@ struct AuthenticationPage: View {
                             statusColor.opacity(0.10),
                             in: RoundedRectangle(cornerRadius: 11, style: .continuous)
                         )
+                        .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(statusText)
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                         Text(controller.message)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         if let savedAt = controller.savedAt, isUsingSavedCredential {
@@ -52,7 +53,7 @@ struct AuthenticationPage: View {
                                 "保存于 \(savedAt.formatted(date: .abbreviated, time: .shortened))",
                                 "Saved \(savedAt.formatted(date: .abbreviated, time: .shortened))"
                             ))
-                            .font(.caption2)
+                            .routekeeperFont(.caption2)
                             .foregroundStyle(.tertiary)
                         }
                     }
@@ -61,6 +62,9 @@ struct AuthenticationPage: View {
                         ProgressView().controlSize(.small)
                     }
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(statusText), \(controller.message)")
+                .accessibilityIdentifier("claude-credential-status")
 
                 if isUsingSavedCredential {
                     AppHairline()
@@ -74,6 +78,8 @@ struct AuthenticationPage: View {
                 sandboxUsageCard
                 credentialManagement
             }
+
+            credentialPurposeNote
         }
         .onAppear {
             controller.refresh()
@@ -116,7 +122,7 @@ struct AuthenticationPage: View {
                 "启动时只读取现有 Keychain 凭证，不会重新登录或覆盖它。只有在 Claude Code 提示凭证失效后，才需要使用右侧的更新流程。",
                 "Launch reads the existing Keychain credential without signing in again or overwriting it. Use the refresh flow only after Claude Code reports that the credential has expired."
             ))
-            .font(.caption)
+            .routekeeperFont(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -156,10 +162,16 @@ struct AuthenticationPage: View {
                 )
             ) {
                 VStack(alignment: .leading, spacing: 8) {
-                    SecureField(text("粘贴登录凭证（token）", "Paste Claude Code token"),
-                                text: $controller.tokenInput)
+                    Text(text("登录凭证（token）", "Claude Code token"))
+                        .routekeeperFont(.caption, weight: .medium)
+                        .foregroundStyle(.secondary)
+                    SecureField(
+                        text("粘贴登录凭证（token）", "Paste Claude Code token"),
+                        text: $controller.tokenInput
+                    )
                         .textFieldStyle(.roundedBorder)
                         .disabled(controller.busy)
+                        .accessibilityLabel(text("Claude Code 登录凭证", "Claude Code token"))
                         .accessibilityIdentifier("claude-token-input")
 
                     HStack {
@@ -191,7 +203,7 @@ struct AuthenticationPage: View {
                     showPasteStep = true
                 }
                 .buttonStyle(.borderless)
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .padding(.leading, 38)
             }
         }
@@ -214,7 +226,7 @@ struct AuthenticationPage: View {
                     systemImage: "arrow.triangle.2.circlepath"
                 )
             }
-            .font(.callout)
+            .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -222,7 +234,7 @@ struct AuthenticationPage: View {
                 "Remote Control、/schedule 和 claude.ai 连接器可能不可用。",
                 "Remote Control, /schedule and claude.ai connectors may be unavailable."
             ))
-            .font(.caption)
+            .routekeeperFont(.caption)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -235,7 +247,7 @@ struct AuthenticationPage: View {
                     "删除后，下次启动 Claude Code 需要重新获取凭证。",
                     "After deletion, the next Claude Code launch requires a new credential."
                 ))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 Spacer()
                 Button(text("删除已保存凭证", "Delete saved credential"), role: .destructive) {
@@ -246,10 +258,36 @@ struct AuthenticationPage: View {
             .padding(.top, 8)
         } label: {
             Label(text("管理已保存凭证", "Manage saved credential"), systemImage: "key")
-                .font(.callout.weight(.medium))
+                .routekeeperFont(.callout, weight: .medium)
         }
         .padding(16)
         .cardSurface(corner: 18)
+    }
+
+    private var credentialPurposeNote: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(text("Claude Code 登录凭证的用途", "What the Claude Code credential is for"))
+                    .routekeeperFont(.caption, weight: .semibold)
+                Text(text(
+                    "它只用于让 Routekeeper 启动的 Claude Code 复用你当前的 Claude 账户登录。凭证从 macOS 钥匙串读取，不用于其他网站或系统账户，也不会写入项目、日志、沙箱交换目录或检测报告。",
+                    "It is used only so Claude Code launched by Routekeeper can reuse your current Claude account sign-in. The credential is read from macOS Keychain; it is not used for other websites or system accounts and is never written to projects, logs, the sandbox exchange folder or check reports."
+                ))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appSurface(.inset, corner: 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("claude-credential-purpose")
     }
 
     private func credentialStep<Actions: View>(
@@ -260,7 +298,7 @@ struct AuthenticationPage: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text("\(number)")
-                .font(.caption.weight(.bold))
+                .routekeeperFont(.caption, weight: .bold)
                 .foregroundStyle(appAccent)
                 .frame(width: 24, height: 24)
                 .background(
@@ -270,9 +308,9 @@ struct AuthenticationPage: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .routekeeperFont(.callout, weight: .semibold)
                 Text(detail)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 actions()

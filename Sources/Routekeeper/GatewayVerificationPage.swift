@@ -5,6 +5,7 @@ struct GatewayVerificationPage: View {
     @Bindable var controller: GatewayVerificationController
     let mode: GatewayProtectionMode
     let onChangeMode: () -> Void
+    @State private var showMethodAndSteps = false
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -25,12 +26,14 @@ struct GatewayVerificationPage: View {
                         statusColor.opacity(0.09),
                         in: RoundedRectangle(cornerRadius: 13, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(statusTitle)
-                        .font(.system(size: 19, weight: .semibold))
+                        .routekeeperFont(.title3, weight: .semibold)
                         .tracking(-0.2)
+                        .accessibilityAddTraits(.isHeader)
                     Text(statusSubtitle)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -40,13 +43,24 @@ struct GatewayVerificationPage: View {
                 }
             }
 
-            modeRow
-
             if mode != .off {
-                gatewaySteps
+                DisclosureGroup(isExpanded: $showMethodAndSteps) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        modeRow
+                        gatewaySteps
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label(
+                        text("检查方法与步骤", "Method and steps"),
+                        systemImage: "list.number"
+                    )
+                    .routekeeperFont(.callout, weight: .medium)
+                }
+
                 if !controller.message.isEmpty {
                     Label(controller.message, systemImage: messageSymbol)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(messageColor)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
@@ -66,26 +80,11 @@ struct GatewayVerificationPage: View {
                     evidenceList(record.allChecks)
                         .padding(.top, 8)
                 }
-                .font(.callout.weight(.medium))
+                .routekeeperFont(.callout, weight: .medium)
             }
-
-            Text(text(
-                "严格结论只覆盖这台 Mac 当前网络会话中的探测结果。节点断开和代理退出由你或外部 Agent 操作；Routekeeper 只复测，不读取节点、订阅或密钥。",
-                "A strict result covers only the probes collected in this Mac network session. You or an external agent perform the node and client actions; Routekeeper only retests and never reads nodes, subscriptions or credentials."
-            ))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            Text(text(
-                "检查会让 ipinfo.io、ipify.org、Claude 跟踪地址与 STUN 服务看到当前出口，但不会保存出口 IP。",
-                "Checks expose the current exit to ipinfo.io, ipify.org, the Claude trace endpoint and STUN services. Routekeeper does not save the exit IP."
-            ))
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(22)
-        .cardSurface(corner: 22)
+        .padding(20)
+        .appSurface(.secondary)
         .accessibilityIdentifier("gateway-verification-card")
     }
 
@@ -94,17 +93,18 @@ struct GatewayVerificationPage: View {
             Image(systemName: mode == .claudeOnly ? "scope" : "arrow.triangle.branch")
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(text("当前保护方式", "Selected protection"))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                 Text(modeTitle)
-                    .font(.callout.weight(.semibold))
+                    .routekeeperFont(.callout, weight: .semibold)
             }
             Spacer()
             Button(text("更改方式", "Change mode"), action: onChangeMode)
-                .buttonStyle(.plain)
-                .font(.callout.weight(.medium))
+                .buttonStyle(.borderless)
+                .routekeeperFont(.callout, weight: .medium)
                 .foregroundStyle(appAccent)
                 .accessibilityIdentifier("gateway-change-mode")
         }
@@ -118,11 +118,14 @@ struct GatewayVerificationPage: View {
     private var gatewaySteps: some View {
         HStack(alignment: .top, spacing: 8) {
             gatewayStep(1, text("检查当前路径", "Check current path"), complete: stepComplete(1))
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             gatewayStep(2, text("停用节点后复测", "Retest with node off"), complete: stepComplete(2))
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             gatewayStep(3, text("退出代理后复测", "Retest with client off"), complete: stepComplete(3))
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
             gatewayStep(4, text("恢复并完成", "Restore and finish"), complete: status == .verified)
         }
     }
@@ -130,7 +133,7 @@ struct GatewayVerificationPage: View {
     private func gatewayStep(_ number: Int, _ title: String, complete: Bool) -> some View {
         HStack(spacing: 7) {
             Text(complete ? "✓" : "\(number)")
-                .font(.caption.weight(.bold))
+                .routekeeperFont(.caption, weight: .bold)
                 .foregroundStyle(complete ? Color.white : Color.secondary)
                 .frame(width: 20, height: 20)
                 .background(
@@ -138,7 +141,7 @@ struct GatewayVerificationPage: View {
                     in: Circle()
                 )
             Text(title)
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(complete ? .primary : .secondary)
                 .lineLimit(2)
         }
@@ -216,7 +219,7 @@ struct GatewayVerificationPage: View {
         case .verified:
             HStack(spacing: 10) {
                 Label(text("本次网络会话已验证", "Verified for this network session"), systemImage: "checkmark.seal.fill")
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     .foregroundStyle(appAccent)
                 Spacer()
                 Button(text("重新检查", "Verify again")) {
@@ -230,7 +233,7 @@ struct GatewayVerificationPage: View {
 
     private func instruction(_ value: String) -> some View {
         Label(value, systemImage: "person.crop.circle.badge.exclamationmark")
-            .font(.callout)
+            .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -243,17 +246,18 @@ struct GatewayVerificationPage: View {
                         .foregroundStyle(checkColor(check.level))
                         .frame(width: 18)
                         .padding(.top, 1)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text(check.title).font(.callout.weight(.medium))
+                            Text(check.title).routekeeperFont(.callout, weight: .medium)
                             if !check.required {
                                 Text(text("参考", "Reference"))
-                                    .font(.caption2)
+                                    .routekeeperFont(.caption2)
                                     .foregroundStyle(.secondary)
                             }
                         }
                         Text(check.detail)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

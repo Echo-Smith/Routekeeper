@@ -5,6 +5,7 @@ struct InspectionPage: View {
     @Bindable var store: GuardStore
     @Bindable var audit: EgressAuditController
     let onOpenNetworkSettings: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
     @State private var showEgressDetails = false
@@ -15,21 +16,11 @@ struct InspectionPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 24) {
             summaryPanel
-            if store.settings.gatewayProtectionMode != .off {
-                GatewayVerificationPage(
-                    controller: store.gatewayVerification,
-                    mode: store.settings.gatewayProtectionMode,
-                    onChangeMode: onOpenNetworkSettings
-                )
-            }
-            if !attentionItems.isEmpty {
-                attentionPanel
-            }
-            resultGroupsPanel
-            egressDetailsPanel
-            boundaryNote
+            inspectionWorkspace
+            inspectionOptionsPanel
+            usageReminderSection
         }
     }
 
@@ -41,12 +32,14 @@ struct InspectionPage: View {
                     .foregroundStyle(summaryColor)
                     .frame(width: 46, height: 46)
                     .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(summaryTitle)
-                        .font(.system(size: 20, weight: .semibold))
+                        .routekeeperFont(.title3, weight: .semibold)
                         .tracking(-0.25)
+                        .accessibilityAddTraits(.isHeader)
                     Text(summarySubtitle)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -63,26 +56,21 @@ struct InspectionPage: View {
                     if let snapshot = store.snapshot {
                         Text(text("自检 \(snapshot.checkedAt.formatted(date: .omitted, time: .shortened))",
                                   "Self-check \(snapshot.checkedAt.formatted(date: .omitted, time: .shortened))"))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .routekeeperFont(.caption).foregroundStyle(.secondary)
                     } else {
-                        Text(L("capsule.noCheck")).font(.caption).foregroundStyle(.secondary)
+                        Text(L("capsule.noCheck")).routekeeperFont(.caption).foregroundStyle(.secondary)
                     }
                     if let report = audit.report {
                         Text(text("出口 \(report.auditedAt.formatted(date: .omitted, time: .shortened)) · \(audit.lastRunTrigger?.title ?? "体检")",
                                   "Egress \(report.auditedAt.formatted(date: .omitted, time: .shortened)) · \(audit.lastRunTrigger?.title ?? "check")"))
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .routekeeperFont(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
                 if store.monitoring {
                     Text(text("监控中自动核验", "Monitoring checks automatically"))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .routekeeperFont(.caption).foregroundStyle(.secondary)
                 } else {
-                    Button(action: onOpenNetworkSettings) {
-                        Label(text("网络保护", "Network protection"), systemImage: "shield.lefthalf.filled")
-                    }
-                    .routekeeperSecondaryButton()
-                    .accessibilityIdentifier("inspection-open-network-settings")
                     Button {
                         Task { await runFullCheck() }
                     } label: {
@@ -99,6 +87,8 @@ struct InspectionPage: View {
                     .accessibilityIdentifier("inspection-run-full")
                 }
                 Menu {
+                    Button(text("打开网络保护", "Open network protection"), action: onOpenNetworkSettings)
+                    Divider()
                     Button(text("导出脱敏报告…", "Export redacted report…")) {
                         store.exportReport(redacted: true)
                     }
@@ -112,32 +102,62 @@ struct InspectionPage: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .disabled(store.snapshot == nil)
-                .help(text("导出报告", "Export report"))
+                .help(text("更多操作", "More actions"))
             }
         }
-        .padding(22)
-        .cardSurface(corner: 22)
+        .padding(20)
+        .appSurface(.primary)
     }
 
-    private var attentionPanel: some View {
-        GuardCard(
-            title: text("需要处理", "Needs attention"),
-            subtitle: text("先处理这些问题，再开启或继续监控。", "Resolve these before starting or continuing monitoring.")
-        ) {
+    private var inspectionWorkspace: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if !attentionItems.isEmpty || gatewayNeedsAttention {
+                attentionSection
+            }
+            resultsSection
+        }
+    }
+
+    private var attentionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                AppSectionHeading(
+                    title: text("需要处理", "Needs attention"),
+                    subtitle: text(
+                        "只列出会影响当前结论或下一步操作的项目。",
+                        "Only items that affect the current verdict or next step are listed."
+                    )
+                )
+                Spacer()
+                Text(text("\(attentionCount) 项", "\(attentionCount) item\(attentionCount == 1 ? "" : "s")"))
+                    .routekeeperFont(.caption, weight: .medium)
+                    .foregroundStyle(.secondary)
+            }
+
+            if gatewayNeedsAttention {
+                GatewayVerificationPage(
+                    controller: store.gatewayVerification,
+                    mode: store.settings.gatewayProtectionMode,
+                    onChangeMode: onOpenNetworkSettings
+                )
+            }
+
             VStack(spacing: 0) {
                 ForEach(Array(attentionItems.prefix(4))) { row in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.circle.fill")
                             .foregroundStyle(.orange)
                             .padding(.top, 2)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(row.title).font(.callout.weight(.semibold))
-                            Text(row.nextStep).font(.caption).foregroundStyle(.secondary)
+                            Text(row.title).routekeeperFont(.callout, weight: .semibold)
+                            Text(row.nextStep).routekeeperFont(.callout).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 0)
                     }
                     .padding(.vertical, 10)
+                    .accessibilityElement(children: .combine)
                     if row.id != attentionItems.prefix(4).last?.id {
                         AppHairline()
                     }
@@ -148,7 +168,21 @@ struct InspectionPage: View {
             } label: {
                 Label(text("打开网络保护", "Open network protection"), systemImage: "shield.lefthalf.filled")
             }
+            .buttonStyle(.borderless)
+            .routekeeperFont(.callout, weight: .medium)
+            .foregroundStyle(appAccent)
         }
+        .padding(20)
+        .appSurface(.primary)
+    }
+
+    private var gatewayNeedsAttention: Bool {
+        guard store.settings.gatewayProtectionMode != .off else { return false }
+        return store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) != .verified
+    }
+
+    private var attentionCount: Int {
+        attentionItems.count + (gatewayNeedsAttention ? 1 : 0)
     }
 
     private var attentionItems: [CheckItem] {
@@ -163,14 +197,24 @@ struct InspectionPage: View {
         InspectionCheckGrouping.groups(from: allCheckItems)
     }
 
-    private var resultGroupsPanel: some View {
-        GuardCard(
-            title: text("检查结果", "Check results"),
-            subtitle: resultGroupsSubtitle
-        ) {
+    private var resultsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AppSectionHeading(
+                title: text("检查结果", "Check results"),
+                subtitle: resultGroupsSubtitle
+            )
+
+            if store.settings.gatewayProtectionMode != .off && !gatewayNeedsAttention {
+                GatewayVerificationPage(
+                    controller: store.gatewayVerification,
+                    mode: store.settings.gatewayProtectionMode,
+                    onChangeMode: onOpenNetworkSettings
+                )
+            }
+
             if inspectionGroups.isEmpty {
                 Text(L("checks.empty"))
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
@@ -183,14 +227,21 @@ struct InspectionPage: View {
                     }
                 }
             }
+
+            if audit.report != nil {
+                AppHairline()
+                    .padding(.vertical, 4)
+                egressDetailsPanel
+            }
         }
+        .padding(.horizontal, 4)
     }
 
     private func checkGroupRow(_ group: InspectionCheckGroup) -> some View {
         let expanded = groupIsExpanded(group)
         return VStack(spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                     groupExpansionOverrides[group.kind] = !expanded
                 }
             } label: {
@@ -198,35 +249,36 @@ struct InspectionPage: View {
                     Image(systemName: group.kind.symbol)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            Color.primary.opacity(0.045),
-                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        )
+                        .frame(width: 20)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(group.kind.title)
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                             .foregroundStyle(.primary)
                         Text(group.kind.subtitle)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
                     Text(groupLevelTitle(group.level))
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(groupLevelColor(group.level))
                     Text(text("\(group.passedCount)/\(group.checks.count)", "\(group.passedCount)/\(group.checks.count)"))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.tertiary)
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
                 .padding(.vertical, 9)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityValue(expanded
+                                ? text("已展开", "Expanded")
+                                : text("已收起", "Collapsed"))
             .accessibilityIdentifier("inspection-group-\(group.kind.rawValue)")
 
             if expanded {
@@ -239,7 +291,7 @@ struct InspectionPage: View {
                         }
                     }
                 }
-                .padding(.leading, 44)
+                .padding(.leading, 32)
                 .padding(.bottom, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .clipped()
@@ -265,7 +317,7 @@ struct InspectionPage: View {
 
     private func groupLevelColor(_ level: InspectionCheckGroupLevel) -> Color {
         switch level {
-        case .passed: return appAccent
+        case .passed: return .secondary
         case .needsAttention, .notice: return .orange
         case .unverified, .notRun: return .secondary
         }
@@ -379,34 +431,39 @@ struct InspectionPage: View {
     private var egressDetailsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                     showEgressDetails.toggle()
                 }
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "list.bullet.rectangle")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(text("完整出口证据", "Full egress evidence"))
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                         Text(text("逐项出口、DNS/UDP、IPv6、服务可达性、时区与本机历史。",
                                   "Exit, DNS/UDP, IPv6, service reachability, time zone and local history evidence."))
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     Text(showEgressDetails ? text("收起", "Hide") : text("查看", "View"))
-                        .font(.callout.weight(.medium))
+                        .routekeeperFont(.callout, weight: .medium)
                         .foregroundStyle(appAccent)
                     Image(systemName: showEgressDetails ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .padding(16)
-            .cardSurface(corner: 18)
+            .buttonStyle(.borderless)
+            .padding(14)
+            .appSurface(.inset, corner: 10)
+            .accessibilityValue(showEgressDetails
+                                ? text("已展开", "Expanded")
+                                : text("已收起", "Collapsed"))
             .accessibilityIdentifier("inspection-egress-details")
 
             if showEgressDetails {
@@ -418,30 +475,110 @@ struct InspectionPage: View {
         }
     }
 
-    @ViewBuilder
-    private var boundaryNote: some View {
-        if let boundary = store.snapshot?.checks.first(where: { $0.id == "boundary" }) {
-            Text(boundary.detail)
-                .font(.caption)
+    private var inspectionOptionsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AppSectionHeading(
+                title: text("检查选项", "Check options")
+            )
+            Toggle(
+                text("启动、网络变化后及定时自动体检", "Automatically check after launch, network changes and on a schedule"),
+                isOn: $store.automaticEgressAuditEnabled
+            )
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("inspection-automatic-egress")
+
+            Picker(
+                text("自动体检间隔", "Automatic-check interval"),
+                selection: $store.automaticEgressAuditIntervalMinutes
+            ) {
+                Text(text("每 15 分钟", "Every 15 minutes")).tag(15)
+                Text(text("每 30 分钟", "Every 30 minutes")).tag(30)
+                Text(text("每 60 分钟", "Every 60 minutes")).tag(60)
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 320, alignment: .leading)
+            .disabled(!store.automaticEgressAuditEnabled)
+            .accessibilityIdentifier("inspection-automatic-egress-interval")
+
+            AppHairline()
+
+            Toggle(
+                text("手动体检时查询第三方 IP 信息", "Query third-party IP intelligence during manual checks"),
+                isOn: $includeIntelligence
+            )
+            .toggleStyle(.switch)
+            .accessibilityIdentifier("inspection-egress-intelligence")
+
+            Text(text(
+                "默认关闭。开启后，手动体检会把出口 IP 发送给 ipwho.is / ipapi.is；自动体检始终只在本机运行。",
+                "Off by default. When enabled, manual checks send the exit IP to ipwho.is / ipapi.is. Automatic checks always stay local."
+            ))
+            .routekeeperFont(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var usageReminderSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AppSectionHeading(
+                title: text("使用提醒", "Before you rely on this"),
+                subtitle: text(
+                    "这些限制始终适用，不因单项检查通过而消失。",
+                    "These limitations always apply, even when every individual check passes."
+                )
+            )
+            reminderRow(
+                text(
+                    "体检会向 ipify、ipinfo.io、Claude 跟踪地址、STUN 与系统 DNS 发送请求，这些服务会看到当前公网出口；未知或缺失结果不会当作通过。",
+                    "Checks contact ipify, ipinfo.io, the Claude trace endpoint, STUN and system DNS. These services can see the current public exit; unknown or missing results are never treated as a pass."
+                ),
+                symbol: "network"
+            )
+            reminderRow(
+                text(
+                    "代理网关的严格结论只覆盖这台 Mac 当前网络会话；切换网络、节点、代理或系统设置后，旧证据会失效。",
+                    "A strict gateway result covers only this Mac's current network session. Changing the network, node, proxy or system settings invalidates the evidence."
+                ),
+                symbol: "clock.arrow.circlepath"
+            )
+            if let boundary = store.snapshot?.checks.first(where: { $0.id == "boundary" }) {
+                reminderRow(boundary.detail, symbol: "hand.raised")
+            } else {
+                reminderRow(
+                    text(
+                        "Routekeeper 不读取 Claude Cookie、登录凭证或对话内容，也不保证匿名、绕过账号风控或预测账号限制。",
+                        "Routekeeper does not read Claude cookies, sign-in credentials or conversations, and it cannot guarantee anonymity, bypass account risk controls or predict account restrictions."
+                    ),
+                    symbol: "hand.raised"
+                )
+            }
+        }
+        .padding(20)
+        .appSurface(.secondary)
+        .accessibilityIdentifier("inspection-usage-reminders")
+    }
+
+    private func reminderRow(_ content: String, symbol: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 18)
+                .accessibilityHidden(true)
+            Text(content)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var summaryTitle: String {
         if store.checking || audit.busy { return text("正在体检", "Checking") }
-        guard let snapshot = store.snapshot else { return text("尚未体检", "Not checked yet") }
-        if !snapshot.ready || audit.report?.assessment.level == .attention {
-            return text("需要检查", "Needs attention")
-        }
-        if audit.report == nil {
-            return text("自检通过，待出口体检", "Self-check passed; egress check pending")
-        }
-        if audit.report?.assessment.level == .insufficient {
-            return text("部分项目未验证", "Some items are unverified")
-        }
-        return text("网络体检正常", "Network check passed")
+        return text("网络体检", "Network check")
     }
 
     private var summarySubtitle: String {

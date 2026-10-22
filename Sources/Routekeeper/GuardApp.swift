@@ -9,33 +9,28 @@ extension Notification.Name {
 @MainActor
 enum AppNavigationRequest {
     private static var pendingPage: GuardPage?
-    private static var pendingProtectionSection: ProtectionSection?
-    private static var pendingSettingsSection: SettingsSection?
+    private static var pendingSettings = false
 
-    static func request(
-        _ page: GuardPage,
-        protectionSection: ProtectionSection? = nil,
-        settingsSection: SettingsSection? = nil
-    ) {
+    static func requestSettings() {
+        pendingPage = nil
+        pendingSettings = true
+        NotificationCenter.default.post(name: .routekeeperShowChecks, object: nil)
+    }
+
+    static func consumeSettingsRequest() -> Bool {
+        defer { pendingSettings = false }
+        return pendingSettings
+    }
+
+    static func request(_ page: GuardPage) {
+        pendingSettings = false
         pendingPage = page
-        pendingProtectionSection = protectionSection
-        pendingSettingsSection = settingsSection
         NotificationCenter.default.post(name: .routekeeperShowChecks, object: nil)
     }
 
     static func consumePendingPage() -> GuardPage? {
         defer { pendingPage = nil }
         return pendingPage
-    }
-
-    static func consumePendingProtectionSection() -> ProtectionSection? {
-        defer { pendingProtectionSection = nil }
-        return pendingProtectionSection
-    }
-
-    static func consumePendingSettingsSection() -> SettingsSection? {
-        defer { pendingSettingsSection = nil }
-        return pendingSettingsSection
     }
 
 }
@@ -47,6 +42,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var statusPopover: NSPopover?
     private var statusRefreshTask: Task<Void, Never>?
+    private var statusPopoverEventMonitors: [Any] = []
     private weak var store: GuardStore?
 
     var isStatusItemConfigured: Bool {
@@ -73,8 +69,8 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
         if statusPopover == nil {
             let popover = NSPopover()
             popover.behavior = .transient
-            popover.animates = true
-            popover.contentSize = NSSize(width: 360, height: 450)
+            popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            popover.contentSize = NSSize(width: 300, height: 340)
             popover.contentViewController = NSHostingController(
                 rootView: GuardMenu(store: store, appDelegate: self)
             )
@@ -95,6 +91,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         statusRefreshTask?.cancel()
         statusRefreshTask = nil
+        removeStatusPopoverEventMonitors()
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
@@ -105,10 +102,62 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleStatusPopover() {
         guard let button = statusItem?.button, let popover = statusPopover else { return }
         if popover.isShown {
-            popover.performClose(nil)
+            closeStatusPopover()
             return
         }
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.contentSize = statusPopoverSize
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        DispatchQueue.main.async {
+            popover.contentViewController?.view.window?.makeKey()
+        }
+        installStatusPopoverEventMonitors()
+    }
+
+    func closeStatusPopover() {
+        statusPopover?.performClose(nil)
+        removeStatusPopoverEventMonitors()
+    }
+
+    private func installStatusPopoverEventMonitors() {
+        removeStatusPopoverEventMonitors()
+        let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self, self.statusPopover?.isShown == true else { return event }
+            if event.type == .keyDown, event.keyCode == 53 {
+                self.closeStatusPopover()
+                return nil
+            }
+            if event.window !== self.statusItem?.button?.window,
+               event.window !== self.statusPopover?.contentViewController?.view.window {
+                self.closeStatusPopover()
+            }
+            return event
+        }
+        let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self, self.statusPopover?.isShown == true else { return }
+            if let button = self.statusItem?.button, let window = button.window {
+                let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+                if buttonFrame.contains(NSEvent.mouseLocation) { return }
+            }
+            self.closeStatusPopover()
+        }
+        if let local { statusPopoverEventMonitors.append(local) }
+        if let global { statusPopoverEventMonitors.append(global) }
+    }
+
+    private func removeStatusPopoverEventMonitors() {
+        for monitor in statusPopoverEventMonitors {
+            NSEvent.removeMonitor(monitor)
+        }
+        statusPopoverEventMonitors.removeAll()
+    }
+
+    private var statusPopoverSize: NSSize {
+        guard let contentView = statusPopover?.contentViewController?.view else {
+            return NSSize(width: 300, height: 340)
+        }
+        contentView.layoutSubtreeIfNeeded()
+        return NSSize(width: 300, height: min(620, max(280, contentView.fittingSize.height)))
     }
 
     private func refreshStatusItem() {
@@ -116,11 +165,16 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
         let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         let image = NSImage(
             systemSymbolName: store.symbol,
-            accessibilityDescription: "Routekeeper"
+            accessibilityDescription: "Routekeeper · \(store.title)"
         )?.withSymbolConfiguration(configuration)
         image?.isTemplate = true
         button.image = image
         button.toolTip = "Routekeeper · \(store.title)"
+        button.setAccessibilityLabel("Routekeeper")
+        button.setAccessibilityValue(store.title)
+        if statusPopover?.isShown == true {
+            statusPopover?.contentSize = statusPopoverSize
+        }
     }
 
     private func refreshDockIcon() {
@@ -167,23 +221,30 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
         showPanel(page: .sandbox)
     }
 
-    func showAboutPanel() {
-        showPanel(page: .settings, settingsSection: .about)
+    func showStandardAboutPanel() {
+        closeStatusPopover()
+        let credits = NSAttributedString(
+            string: L10n.resolvedEnglish
+                ? "Network inspection, monitoring and Claude environment boundaries.\nLocal checks do not alter server-side records or guarantee anonymity."
+                : "网络检查、监控与 Claude 环境边界辅助工具。\n本机检查不会更改服务端记录，也不保证匿名性。",
+            attributes: [
+                .font: NSFont.preferredFont(forTextStyle: .callout),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
-    private func showPanel(
-        page: GuardPage,
-        protectionSection: ProtectionSection? = nil,
-        settingsSection: SettingsSection? = nil
-    ) {
+    func showSettingsPanel() {
+        AppNavigationRequest.requestSettings()
+        showPanel(page: nil)
+    }
+
+    private func showPanel(page: GuardPage?) {
         statusPopover?.performClose(nil)
         NSApp.setActivationPolicy(.regular)
         refreshDockIcon()
-        AppNavigationRequest.request(
-            page,
-            protectionSection: protectionSection,
-            settingsSection: settingsSection
-        )
+        if let page { AppNavigationRequest.request(page) }
         NSApplication.shared.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -303,16 +364,24 @@ struct GuardApp: App {
                     store.startEgressAuditAutomation()
                 }
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.automatic)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: 1120, height: 720)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(L10n.resolvedEnglish ? "Settings…" : "设置…") {
+                    appDelegate.showSettingsPanel()
+                }
+                .keyboardShortcut(",")
+            }
             CommandGroup(replacing: .appInfo) {
-                Button(L("menu.about")) { appDelegate.showAboutPanel() }
+                Button(L("menu.about")) { appDelegate.showStandardAboutPanel() }
             }
             CommandGroup(replacing: .appTermination) {
                 Button(L("menu.quit")) { confirmQuit(store) }.keyboardShortcut("q")
             }
+            SidebarCommands()
         }
     }
 }
@@ -342,61 +411,108 @@ func confirmQuit(_ store: GuardStore) {
 struct GuardMenu: View {
     @Bindable var store: GuardStore
     let appDelegate: RoutekeeperAppDelegate
+    @FocusState private var primaryActionFocused: Bool
+    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             header
+            primaryAction
+                .focused($primaryActionFocused)
             summary
             if let event = store.events.first, event.isAttention {
                 Label(event.message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(Color.orange)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             AppHairline()
-            actionList
+            secondaryActions
             AppHairline()
             Button {
                 confirmQuit(store)
             } label: {
                 menuActionLabel(L("menu.quitShort"), systemImage: "power")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("status-popover-quit")
         }
-        .padding(15)
-        .frame(width: 360, alignment: .leading)
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
+        .defaultFocus($primaryActionFocused, true)
+        .onExitCommand {
+            appDelegate.closeStatusPopover()
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                primaryActionFocused = true
+            }
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 11) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: store.symbol)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(statusColor)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(
                     statusColor.opacity(0.11),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
                 )
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(store.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .routekeeperFont(.headline)
                 Text(statusDetail)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             if store.policy.phase == .armed || store.sandbox.phase == .running {
                 Text(L10n.resolvedEnglish ? "Active" : "运行中")
-                    .font(.system(size: 10, weight: .semibold))
+                    .routekeeperFont(.caption2, weight: .semibold)
                     .foregroundStyle(statusColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
                     .background(statusColor.opacity(0.10), in: Capsule())
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("status-popover-header")
+    }
+
+    @ViewBuilder
+    private var primaryAction: some View {
+        if #available(macOS 26.0, *) {
+            primaryActionButton
+                .buttonStyle(.glassProminent)
+        } else {
+            primaryActionButton
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var primaryActionButton: some View {
+        Button {
+            if store.settings.experimentalSandboxEnabled {
+                appDelegate.showSandboxPanel()
+            } else {
+                appDelegate.showChecksPanel()
+            }
+        } label: {
+            Label(
+                store.settings.experimentalSandboxEnabled
+                    ? (L10n.resolvedEnglish ? "Open sandbox" : "打开沙箱")
+                    : (L10n.resolvedEnglish ? "Open network check" : "打开网络体检"),
+                systemImage: store.settings.experimentalSandboxEnabled ? "lock.shield" : "rectangle.inset.filled"
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .controlSize(.large)
+        .accessibilityIdentifier("status-popover-primary")
     }
 
     private var summary: some View {
@@ -410,51 +526,36 @@ struct GuardMenu: View {
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(row.label)
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 62, alignment: .leading)
+                        .frame(width: 72 * textScale, alignment: .leading)
                     Text(row.value)
-                        .font(.caption.weight(.medium))
+                        .routekeeperFont(.caption, weight: .medium)
                         .foregroundStyle(row.isAttention ? Color.orange : Color.primary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
                     if row.isAttention {
                         Image(systemName: "exclamationmark.circle.fill")
-                            .font(.caption2)
+                            .routekeeperFont(.caption2)
                             .foregroundStyle(Color.orange)
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.vertical, 6)
+                .accessibilityElement(children: .combine)
             }
         }
         .background(
             Color.primary.opacity(0.035),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
+        .accessibilityIdentifier("status-popover-summary")
     }
 
-    private var actionList: some View {
+    private var secondaryActions: some View {
         VStack(spacing: 2) {
-            Button {
-                appDelegate.showChecksPanel()
-            } label: {
-                menuActionLabel(L("menu.openPanel"), systemImage: "rectangle.inset.filled")
-            }
-            .buttonStyle(.plain)
-
             if store.settings.experimentalSandboxEnabled {
-                Button {
-                    appDelegate.showSandboxPanel()
-                } label: {
-                    menuActionLabel(
-                        L10n.resolvedEnglish ? "Open sandbox" : "打开沙箱",
-                        systemImage: "lock.shield"
-                    )
-                }
-                .buttonStyle(.plain)
-
                 if store.sandbox.externalActions.pendingCount > 0 {
                     Button {
                         appDelegate.showSandboxPanel()
@@ -466,7 +567,8 @@ struct GuardMenu: View {
                             systemImage: "person.badge.key"
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("status-popover-review")
                 }
 
                 if store.sandbox.phase == .running {
@@ -478,7 +580,8 @@ struct GuardMenu: View {
                             systemImage: "wifi.slash"
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("status-popover-network")
                 } else if store.sandbox.phase == .networkPaused {
                     Button {
                         Task { await store.resumeSandboxNetwork() }
@@ -488,7 +591,8 @@ struct GuardMenu: View {
                             systemImage: "wifi"
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("status-popover-network")
                 }
 
                 if store.sandbox.phase.isActive {
@@ -500,7 +604,8 @@ struct GuardMenu: View {
                             systemImage: "stop.circle"
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("status-popover-end-sandbox")
                 }
             } else if store.monitoring {
                 Button {
@@ -508,15 +613,17 @@ struct GuardMenu: View {
                 } label: {
                     menuActionLabel(L("menu.stopMonitor"), systemImage: "pause.circle")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("status-popover-stop-monitor")
             } else {
                 Button {
                     Task { await store.check() }
                 } label: {
                     menuActionLabel(L("menu.runCheck"), systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .disabled(store.checking)
+                .accessibilityIdentifier("status-popover-run-check")
             }
         }
     }
@@ -528,7 +635,7 @@ struct GuardMenu: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(title)
-                .font(.callout)
+                .routekeeperFont(.callout)
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
@@ -548,6 +655,10 @@ struct GuardMenu: View {
             return appAccent
         }
         return .secondary
+    }
+
+    private var textScale: CGFloat {
+        (AppTextScale(rawValue: textScaleRaw) ?? .standard).multiplier
     }
 
     private var statusDetail: String {
@@ -588,17 +699,9 @@ struct GuardMenu: View {
         }
         return [
             .init(
-                label: L10n.resolvedEnglish ? "Target" : "目标",
-                value: session.configuration.target.title
-            ),
-            .init(
                 label: L10n.resolvedEnglish ? "Network" : "网络",
                 value: sandboxNetworkSummary,
                 isAttention: session.phase == .networkPaused
-            ),
-            .init(
-                label: L10n.resolvedEnglish ? "Proxy" : "代理",
-                value: sandboxProxySummary
             ),
             .init(
                 label: L10n.resolvedEnglish ? "Exit" : "出口",
@@ -623,27 +726,12 @@ struct GuardMenu: View {
     }
 
     private var standardSummaryRows: [MenuSummaryRow] {
-        let selectedScopes = [
-            store.settings.protectDesktop ? (L10n.resolvedEnglish ? "Desktop" : "桌面版") : nil,
-            store.settings.protectCode ? (L10n.resolvedEnglish ? "Code" : "Code") : nil
-        ].compactMap { $0 }
         let exit = store.settings.targetIP.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastCheck: String
         if let snapshot = store.snapshot {
             lastCheck = snapshot.checkedAt.formatted(date: .omitted, time: .shortened)
         } else {
             lastCheck = L10n.resolvedEnglish ? "Not run" : "尚未运行"
-        }
-        let exitMatch: String
-        let exitMismatch: Bool
-        if let proxy = store.snapshot?.proxyIP, let tunnel = store.snapshot?.tunnelIP {
-            exitMatch = proxy == tunnel
-                ? (L10n.resolvedEnglish ? "Matched" : "一致")
-                : (L10n.resolvedEnglish ? "Mismatch" : "不一致")
-            exitMismatch = proxy != tunnel
-        } else {
-            exitMatch = L10n.resolvedEnglish ? "Unknown" : "未知"
-            exitMismatch = false
         }
         return [
             .init(
@@ -654,18 +742,6 @@ struct GuardMenu: View {
             .init(
                 label: L10n.resolvedEnglish ? "Last check" : "最近体检",
                 value: lastCheck
-            ),
-            .init(
-                label: L10n.resolvedEnglish ? "Route" : "双路出口",
-                value: exitMatch,
-                isAttention: exitMismatch
-            ),
-            .init(
-                label: L10n.resolvedEnglish ? "Scope" : "保护范围",
-                value: selectedScopes.isEmpty
-                    ? (L10n.resolvedEnglish ? "Not selected" : "尚未选择")
-                    : selectedScopes.joined(separator: " + "),
-                isAttention: selectedScopes.isEmpty
             ),
             .init(
                 label: L10n.resolvedEnglish ? "Monitor" : "监控",
@@ -726,7 +802,6 @@ private struct WindowCommandBridge: NSViewRepresentable {
         let view = WindowProbeView()
         view.onWindowChange = { [weak delegate, openWindow] window in
             guard let window, let delegate else { return }
-            configureWindowChrome(window)
             delegate.attach(window, openWindow: { openWindow(id: "main") })
         }
         return view
@@ -734,7 +809,6 @@ private struct WindowCommandBridge: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         guard let window = view.window else { return }
-        configureWindowChrome(window)
         delegate.attach(window, openWindow: { openWindow(id: "main") })
     }
 }
@@ -746,13 +820,4 @@ private final class WindowProbeView: NSView {
         super.viewDidMoveToWindow()
         onWindowChange?(window)
     }
-}
-
-@MainActor
-private func configureWindowChrome(_ window: NSWindow) {
-    window.styleMask.insert(.fullSizeContentView)
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.titlebarSeparatorStyle = .none
-    window.isMovableByWindowBackground = true
 }

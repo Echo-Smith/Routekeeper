@@ -117,7 +117,7 @@ struct SandboxPage: View {
                      "There are no check results or pending requests."),
                 systemImage: "stethoscope"
             )
-            .font(.callout)
+            .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
         }
     }
@@ -132,6 +132,7 @@ struct SandboxPage: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .frame(maxWidth: 440)
+            .accessibilityLabel(text("沙箱页面", "Sandbox sections"))
             .accessibilityIdentifier("sandbox-section-picker")
 
             Spacer()
@@ -141,7 +142,7 @@ struct SandboxPage: View {
                     text("设置已锁定", "Settings locked"),
                     systemImage: "lock.fill"
                 )
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
             }
         }
@@ -182,11 +183,12 @@ struct SandboxPage: View {
                         statusColor.opacity(0.10),
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session.statusTitle)
-                        .font(.system(size: 17, weight: .semibold))
+                        .routekeeperFont(.headline)
                     Text(session.message)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -213,7 +215,7 @@ struct SandboxPage: View {
                 )
                 .foregroundStyle(.secondary)
             }
-            .font(.callout.weight(.medium))
+            .routekeeperFont(.callout, weight: .medium)
         }
     }
 
@@ -227,10 +229,7 @@ struct SandboxPage: View {
                        "The original project is copied; changes stay in the workspace.")
         ) {
             VStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 14) {
-                    Text(text("运行目标", "Application"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
+                LabeledContent {
                     Picker("", selection: $session.configuration.target) {
                         ForEach(IsolationApplicationTarget.allCases, id: \.self) { target in
                             Text(target.title).tag(target)
@@ -238,9 +237,12 @@ struct SandboxPage: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
-                    .frame(width: 260)
-                    Spacer()
+                    .frame(minWidth: 240, maxWidth: 320)
+                    .accessibilityLabel(text("运行目标", "Application"))
+                } label: {
+                    Text(text("运行目标", "Application"))
                 }
+                .accessibilityElement(children: .contain)
 
                 desktopInstallationRow
                 if session.configuration.target == .claudeDesktop {
@@ -266,7 +268,7 @@ struct SandboxPage: View {
                             "登录状态仅保存在 Routekeeper 专属目录，可随时清除。",
                             "Sign-in state stays in a Routekeeper-owned folder and can be cleared at any time."
                         ))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -287,37 +289,39 @@ struct SandboxPage: View {
                     value: $session.configuration.exchangePath,
                     placeholder: text("选择单独的文件交换目录", "Choose a separate file-exchange folder")
                 )
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(text("会话时区", "Session timezone"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
-                    TextField("Asia/Shanghai", text: $session.configuration.timezoneIdentifier)
-                        .textFieldStyle(.roundedBorder)
-                    Menu(text("常用", "Presets")) {
-                        ForEach([
-                            "Asia/Shanghai", "Asia/Tokyo", "UTC",
-                            "Europe/London", "America/New_York", "America/Los_Angeles"
-                        ], id: \.self) { identifier in
-                            Button(identifier) {
-                                session.configuration.timezoneIdentifier = identifier
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        TextField("Asia/Shanghai", text: $session.configuration.timezoneIdentifier)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(text("会话时区", "Session timezone"))
+                        Menu(text("常用", "Presets")) {
+                            ForEach([
+                                "Asia/Shanghai", "Asia/Tokyo", "UTC",
+                                "Europe/London", "America/New_York", "America/Los_Angeles"
+                            ], id: \.self) { identifier in
+                                Button(identifier) {
+                                    session.configuration.timezoneIdentifier = identifier
+                                }
                             }
                         }
+                        .fixedSize()
+                        .accessibilityLabel(text("常用时区", "Timezone presets"))
                     }
-                    .fixedSize()
+                } label: {
+                    Text(text("会话时区", "Session timezone"))
                 }
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(text("会话语言", "Session locale"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
+                .accessibilityElement(children: .contain)
+                LabeledContent {
                     Text(session.sessionLocaleIdentifier)
-                        .font(.system(.callout, design: .monospaced))
-                    Spacer()
+                        .routekeeperFont(.callout, design: .monospaced)
+                } label: {
+                    Text(text("会话语言", "Session locale"))
                 }
                 Text(text(
                     "时区和语言只用于本次会话，不修改系统设置。",
                     "Timezone and language apply only to this session."
                 ))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 if session.configuration.target == .claudeDesktop {
@@ -325,7 +329,7 @@ struct SandboxPage: View {
                         "系统浏览器登录可能失败；沙箱不会因此开放直连。",
                         "System-browser sign-in may fail; the sandbox will not open direct access for it."
                     ))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -343,6 +347,7 @@ struct SandboxPage: View {
                 Image(systemName: supported ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(supported ? appAccent : Color.orange)
                     .frame(width: 18)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(
                         installation?.runtimeFamily == .electron
@@ -355,7 +360,7 @@ struct SandboxPage: View {
                                     ? text("官方客户端缺少可隔离启动的窗口或 daemon", "The official app has no isolatable window or daemon")
                                     : text("已验证官方 Claude Desktop", "Official Claude Desktop verified")
                     )
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     if installation?.runtimeFamily == .electron,
                        session.desktopAppRunningOutsideSandbox,
                        !session.claudeRunning {
@@ -363,13 +368,13 @@ struct SandboxPage: View {
                             "请先完全退出 Claude Desktop 及其菜单栏进程，再点“重新检测”。否则单实例机制可能只激活沙箱外实例。",
                             "Fully quit Claude Desktop and its menu-bar process first, then choose Detect again. Otherwise its single-instance behavior may only activate the instance outside the sandbox."
                         ))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     if let installation {
                         Text(desktopInstallationDetail(installation))
-                            .font(.system(.caption, design: .monospaced))
+                            .routekeeperFont(.caption, design: .monospaced)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                         if !installation.supportsIsolatedLaunch {
@@ -377,7 +382,7 @@ struct SandboxPage: View {
                                 "这个安装包既没有内嵌窗口，也没有通过签名校验的本地 Web daemon。Routekeeper 会拒绝回退到沙箱外浏览器。",
                                 "This package has neither a bundled window nor a signed local web daemon. Routekeeper refuses the outside-browser fallback."
                             ))
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                         } else if installation.runtimeFamily == .operonHostedWeb {
@@ -385,7 +390,7 @@ struct SandboxPage: View {
                                 "官方 Science 包本身不含 Shell。Routekeeper 会在外层沙箱中启动已签名的 claude-science daemon，并用只允许两个回环端口的受控窗口承载官方 Web UI。",
                                 "The official Science package has no shell. Routekeeper runs the signed claude-science daemon inside the outer sandbox and hosts the official web UI in a controlled window limited to its two loopback ports."
                             ))
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         }
@@ -394,7 +399,7 @@ struct SandboxPage: View {
                             "请从 Anthropic 官方渠道安装。Routekeeper 只检测并隔离启动已安装的客户端，不捆绑、不静默安装，也不会复制应用或登录数据。",
                             "Install from Anthropic’s official channel. Routekeeper only detects and launches an installed client; it does not bundle, silently install, or copy the app or sign-in data."
                         ))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -441,6 +446,7 @@ struct SandboxPage: View {
                     setupGuideStep(step)
                 }
             }
+            .accessibilityElement(children: .contain)
 
             AppHairline()
 
@@ -453,12 +459,13 @@ struct SandboxPage: View {
                         guideNextColor.opacity(0.10),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(text("下一步", "Next step"))
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(guideNextColor)
                     Text(guideNextText)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -485,12 +492,13 @@ struct SandboxPage: View {
                         step.state.color.opacity(0.12),
                         in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 Text(step.title)
-                    .font(.caption.weight(.semibold))
+                    .routekeeperFont(.caption, weight: .semibold)
                     .foregroundStyle(step.state == .pending ? .secondary : .primary)
             }
             Text(step.detail)
-                .font(.caption2)
+                .routekeeperFont(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -504,6 +512,9 @@ struct SandboxPage: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(step.state.color.opacity(step.state == .pending ? 0.06 : 0.16), lineWidth: 0.7)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(step.title)。\(step.detail)")
+        .accessibilityValue(step.state.accessibilityValue)
     }
 
     private var proxyConfigurationCard: some View {
@@ -520,11 +531,12 @@ struct SandboxPage: View {
                     Image(systemName: consistent ? "link.circle.fill" : "exclamationmark.circle.fill")
                         .foregroundStyle(color)
                         .frame(width: 18)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(session.proxyConsistencyTitle)
-                            .font(.callout.weight(.medium))
+                            .routekeeperFont(.callout, weight: .medium)
                         Text(session.proxyConsistencyDetail)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -537,7 +549,7 @@ struct SandboxPage: View {
                 }
                 if !session.proxyDetectionMessage.isEmpty {
                     Text(session.proxyDetectionMessage)
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                 }
                 let exitAnchors = [session.expectedExits.ipv4, session.expectedExits.ipv6]
@@ -548,7 +560,7 @@ struct SandboxPage: View {
                              "Claude exit anchors: \(exitAnchors.joined(separator: " / "))"),
                         systemImage: "target"
                     )
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                 }
                 if session.expectedExits.ipv4 != nil {
@@ -556,7 +568,7 @@ struct SandboxPage: View {
                         "若 Claude 经代理节点显示轮换 IPv6，预检会用同一中继的稳定 IPv4 出口核对，并记录本次 IPv6 证据，不会声称两者字面相同。",
                         "If the proxy node presents a rotating IPv6 address to Claude, preflight verifies the same relay’s stable IPv4 exit and records the observed IPv6 as evidence; it does not claim the addresses are literally equal."
                     ))
-                    .font(.caption2)
+                    .routekeeperFont(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -576,12 +588,13 @@ struct SandboxPage: View {
                 HStack(spacing: 11) {
                     Image(systemName: passed ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(passed ? appAccent : Color.orange)
+                        .accessibilityHidden(true)
                     Text(
                         passed
                             ? text("\(session.checks.count) 项检查全部通过", "\(session.checks.count) checks passed")
                             : text("\(failedChecks.count) 项需要处理，其余通过", "\(failedChecks.count) need attention; the rest passed")
                     )
-                    .font(.callout.weight(.semibold))
+                    .routekeeperFont(.callout, weight: .semibold)
                     Spacer()
                 }
                 .padding(.bottom, 8)
@@ -608,7 +621,7 @@ struct SandboxPage: View {
                     },
                     label: {
                         Text(text("查看全部 \(session.checks.count) 项检查", "Show all \(session.checks.count) checks"))
-                            .font(.caption.weight(.medium))
+                            .routekeeperFont(.caption, weight: .medium)
                             .foregroundStyle(.secondary)
                     }
                 )
@@ -624,11 +637,12 @@ struct SandboxPage: View {
                     .foregroundStyle(check.passed ? appAccent : Color.orange)
                     .frame(width: 18)
                     .padding(.top, 1)
+                    .accessibilityHidden(true)
                 Text(check.title)
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     .frame(width: 130, alignment: .leading)
                 Text(check.detail)
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -636,8 +650,9 @@ struct SandboxPage: View {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Image(systemName: "arrow.turn.down.right")
                         .foregroundStyle(Color.orange)
+                        .accessibilityHidden(true)
                     Text(sandboxRemediation(for: check.id))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -645,6 +660,12 @@ struct SandboxPage: View {
             }
         }
         .padding(.vertical, 7)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(
+            check.passed
+                ? text("通过", "Passed")
+                : text("未通过", "Failed")
+        )
     }
 
     private var controlsCard: some View {
@@ -684,7 +705,7 @@ struct SandboxPage: View {
                     ProgressView().controlSize(.small)
                     if session.networkValidationInProgress {
                         Text(text("稳定后复检", "Revalidating"))
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -726,12 +747,12 @@ struct SandboxPage: View {
                 if !desktop, store.authentication.status != .saved {
                     Label(
                         text(
-                            "尚未保存 Claude Code 登录凭证。请先在“保护 → Claude Code 登录凭证”中保存。",
-                            "No Claude Code sign-in token is saved. Add one under Protection → Claude Code sign-in first."
+                            "尚未保存 Claude Code 登录凭证。请先在“工具 → 登录凭证”中保存。",
+                            "No Claude Code sign-in token is saved. Add one under Tools → Sign-in first."
                         ),
                         systemImage: "key.slash"
                     )
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.orange)
                 }
             }
@@ -775,7 +796,7 @@ struct SandboxPage: View {
                     ),
                     systemImage: "exclamationmark.shield.fill"
                 )
-                .font(.callout)
+                .routekeeperFont(.callout)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -788,6 +809,7 @@ struct SandboxPage: View {
                         text: $claudeLoginLink
                     )
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(text("邮件登录链接", "Email sign-in URL"))
                     .accessibilityIdentifier("claude-login-link-input")
 
                     Button(text("交给沙箱 Claude", "Send to sandboxed Claude")) {
@@ -822,7 +844,7 @@ struct SandboxPage: View {
                         Image(systemName: "key.horizontal").foregroundStyle(Color.secondary)
                     }
                     Text(session.claudeLoginCallbackMessage)
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -850,20 +872,21 @@ struct SandboxPage: View {
                         Color.primary.opacity(0.045),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(gatewayReferenceTitle(status))
-                        .font(.callout.weight(.semibold))
+                        .routekeeperFont(.callout, weight: .semibold)
                     Text(text(
                         "沙箱网络只允许经过 Routekeeper 中继；代理不可用时直接失败，不会退回公网直连。",
                         "Sandbox traffic is allowed only through the Routekeeper relay. If the proxy is unavailable, it fails instead of falling back to direct internet access."
                     ))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Button(text("网络保护", "Network protection")) {
-                    AppNavigationRequest.request(.protection, protectionSection: .networkSettings)
+                    AppNavigationRequest.request(.networkProtection)
                 }
                 .routekeeperSecondaryButton()
             }
@@ -902,12 +925,12 @@ struct SandboxPage: View {
                         )
                     VStack(alignment: .leading, spacing: 3) {
                         Text(text("交接目录", "Handoff directory"))
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                         Text(".routekeeper-actions")
-                            .font(.system(.caption, design: .monospaced))
+                            .routekeeperFont(.caption, design: .monospaced)
                             .foregroundStyle(.secondary)
                         Text(session.externalActions.message)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(
                                 session.externalActions.pendingCount > 0
                                     ? Color.orange
@@ -935,7 +958,7 @@ struct SandboxPage: View {
                         ),
                         systemImage: "tray"
                     )
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -951,11 +974,11 @@ struct SandboxPage: View {
                             text("已拒绝的请求", "Rejected requests"),
                             systemImage: "exclamationmark.shield"
                         )
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(Color.orange)
                         ForEach(session.externalActions.issues.prefix(4)) { issue in
                             Text("\(issue.manifestName)：\(issue.message)")
-                                .font(.caption)
+                                .routekeeperFont(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         if session.externalActions.issues.count > 4 {
@@ -963,7 +986,7 @@ struct SandboxPage: View {
                                 "另有 \(session.externalActions.issues.count - 4) 条无效请求未显示。",
                                 "\(session.externalActions.issues.count - 4) more invalid request(s) hidden."
                             ))
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                         }
                     }
@@ -987,9 +1010,9 @@ struct SandboxPage: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(request.title)
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                         Text(handoffKindLabel(request.kind))
-                            .font(.caption2.weight(.medium))
+                            .routekeeperFont(.caption2, weight: .medium)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -997,14 +1020,14 @@ struct SandboxPage: View {
                     }
                     if !request.summary.isEmpty {
                         Text(request.summary)
-                            .font(.caption)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Text(
                         "\(request.suggestedName) · \(handoffByteCount(item.package.payloadBytes)) · SHA256 \(item.package.payloadSHA256.prefix(12))"
                     )
-                    .font(.system(.caption2, design: .monospaced))
+                    .routekeeperFont(.caption2, design: .monospaced)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1015,7 +1038,7 @@ struct SandboxPage: View {
 
             if let detail = handoffStateDetail(item.state) {
                 Text(detail)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(handoffStateColor(item.state))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 43)
@@ -1063,7 +1086,7 @@ struct SandboxPage: View {
 
     private func handoffStateBadge(_ state: HandoffApprovalState) -> some View {
         Text(handoffStateTitle(state))
-            .font(.caption2.weight(.semibold))
+            .routekeeperFont(.caption2, weight: .semibold)
             .foregroundStyle(handoffStateColor(state))
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -1206,9 +1229,9 @@ struct SandboxPage: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.package.request.title)
-                        .font(.title3.weight(.semibold))
+                        .routekeeperFont(.title3, weight: .semibold)
                     Text(item.package.request.summary)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1217,7 +1240,7 @@ struct SandboxPage: View {
             AppHairline()
             ScrollView {
                 Text(handoffPreviewText(item.package))
-                    .font(.system(.caption, design: .monospaced))
+                    .routekeeperFont(.caption, design: .monospaced)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
@@ -1261,11 +1284,11 @@ struct SandboxPage: View {
                 .foregroundStyle(.secondary)
             } else {
                 Text(text("发现 \(session.changedFiles.count) 条文件差异", "\(session.changedFiles.count) file differences found"))
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(session.changedFiles, id: \.self) { line in
                         Text(line)
-                            .font(.system(.caption, design: .monospaced))
+                            .routekeeperFont(.caption, design: .monospaced)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
@@ -1284,74 +1307,84 @@ struct SandboxPage: View {
             )
         ) {
             VStack(spacing: 12) {
-                HStack(spacing: 14) {
+                LabeledContent {
+                    HStack(spacing: 10) {
+                        Picker("", selection: $session.configuration.upstream.protocolType) {
+                            ForEach(IsolationUpstreamProtocol.allCases, id: \.self) { type in
+                                Text(type.title).tag(type)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(minWidth: 210, maxWidth: 260)
+                        .accessibilityLabel(text("上游协议", "Upstream protocol"))
+                        Menu(text("常用本地端口", "Common local ports")) {
+                            Button(text("混合代理 7890", "Mixed proxy 7890")) {
+                                session.configuration.upstream.protocolType = .httpConnect
+                                session.configuration.upstream.port = 7890
+                            }
+                            Button(text("HTTP 代理 10809", "HTTP proxy 10809")) {
+                                session.configuration.upstream.protocolType = .httpConnect
+                                session.configuration.upstream.port = 10809
+                            }
+                            Button(text("SOCKS 代理 10808", "SOCKS proxy 10808")) {
+                                session.configuration.upstream.protocolType = .socks5
+                                session.configuration.upstream.port = 10808
+                            }
+                            Button(text("SOCKS 代理 1080", "SOCKS proxy 1080")) {
+                                session.configuration.upstream.protocolType = .socks5
+                                session.configuration.upstream.port = 1080
+                            }
+                        }
+                        .fixedSize()
+                    }
+                } label: {
                     Text(text("上游协议", "Upstream protocol"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
-                    Picker("", selection: $session.configuration.upstream.protocolType) {
-                        ForEach(IsolationUpstreamProtocol.allCases, id: \.self) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 230)
-                    Menu(text("常用本地端口", "Common local ports")) {
-                        Button(text("混合代理 7890", "Mixed proxy 7890")) {
-                            session.configuration.upstream.protocolType = .httpConnect
-                            session.configuration.upstream.port = 7890
-                        }
-                        Button(text("HTTP 代理 10809", "HTTP proxy 10809")) {
-                            session.configuration.upstream.protocolType = .httpConnect
-                            session.configuration.upstream.port = 10809
-                        }
-                        Button(text("SOCKS 代理 10808", "SOCKS proxy 10808")) {
-                            session.configuration.upstream.protocolType = .socks5
-                            session.configuration.upstream.port = 10808
-                        }
-                        Button(text("SOCKS 代理 1080", "SOCKS proxy 1080")) {
-                            session.configuration.upstream.protocolType = .socks5
-                            session.configuration.upstream.port = 1080
-                        }
-                    }
-                    .fixedSize()
                 }
-                HStack(spacing: 14) {
-                    Text(text("本地端口", "Local port"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
-                    TextField(
-                        "7890",
-                        value: $session.configuration.upstream.port,
-                        format: .number.grouping(.never)
-                    )
+                .accessibilityElement(children: .contain)
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        TextField(
+                            "7890",
+                            value: $session.configuration.upstream.port,
+                            format: .number.grouping(.never)
+                        )
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
-                    Stepper("", value: $session.configuration.upstream.port, in: 1...65535)
-                        .labelsHidden()
-                    Spacer()
+                        .accessibilityLabel(text("本地端口", "Local port"))
+                        Stepper("", value: $session.configuration.upstream.port, in: 1...65535)
+                            .labelsHidden()
+                            .accessibilityLabel(text("本地端口", "Local port"))
+                    }
+                } label: {
+                    Text(text("本地端口", "Local port"))
                 }
-                HStack(spacing: 14) {
+                .accessibilityElement(children: .contain)
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        TextField("", text: $session.configuration.upstream.username)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(text("用户名（可选）", "Username (optional)"))
+                        SecureField(text("密码（可选）", "Password (optional)"), text: $session.configuration.upstream.password)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel(text("密码（可选）", "Password (optional)"))
+                    }
+                } label: {
                     Text(text("用户名（可选）", "Username (optional)"))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 116, alignment: .leading)
-                    TextField("", text: $session.configuration.upstream.username)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField(text("密码（可选）", "Password (optional)"), text: $session.configuration.upstream.password)
-                        .textFieldStyle(.roundedBorder)
                 }
+                .accessibilityElement(children: .contain)
                 Text(text(
                     "上游地址固定为本机；密码只用于本次运行。",
                     "The upstream is always local; the password is used only for this run."
                 ))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 Text(text(
                     "这是进程隔离，不是虚拟机；Claude 仍能读取本机网络配置。",
                     "This is process isolation, not a virtual machine; Claude can still read host network configuration."
                 ))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
                 Text(
@@ -1365,7 +1398,7 @@ struct SandboxPage: View {
                             "Localhost servers and the default browser are blocked; preview the workspace after ending the session."
                         )
                 )
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -1401,7 +1434,7 @@ struct SandboxPage: View {
                 Spacer()
                 if store.settings.experimentalSandboxEnabled {
                     Text(session.statusTitle)
-                        .font(.caption.weight(.medium))
+                        .routekeeperFont(.caption, weight: .medium)
                         .foregroundStyle(session.phase == .failed ? Color.orange : Color.secondary)
                 }
             }
@@ -1411,7 +1444,7 @@ struct SandboxPage: View {
                          "End the active session before turning the sandbox off."),
                     systemImage: "lock.fill"
                 )
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
             }
         }
@@ -1434,7 +1467,7 @@ struct SandboxPage: View {
                            "Keep Claude Code’s own permission prompts and internal sandbox enabled."),
                       systemImage: "checkmark.shield")
             }
-            .font(.callout)
+            .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -1456,7 +1489,7 @@ struct SandboxPage: View {
                     "检测不会启动 Claude，也不会创建会话。",
                     "Detection does not launch Claude or create a session."
                 ))
-                .font(.callout)
+                .routekeeperFont(.callout)
                 .foregroundStyle(.secondary)
                 Spacer()
                 Button(text("检测并保存出口", "Detect and save exit")) {
@@ -1478,10 +1511,10 @@ struct SandboxPage: View {
         ) {
             HStack {
                 Text(session.configuration.target.title)
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                 if !session.configuration.exchangePath.isEmpty {
                     Text(abbreviatedPath(session.configuration.exchangePath))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -1658,7 +1691,10 @@ struct SandboxPage: View {
         case .chooseExchange:
             return text("选择一个单独的交换文件夹，用于有意传入或取出文件。", "Choose a separate exchange folder for intentional file transfer.")
         case .authentication:
-            return text("保存 Claude Code 登录凭证，避免启动时转到沙箱外的浏览器。", "Save a Claude Code token so launch does not fall back to a browser outside the sandbox.")
+            return text(
+                "在“工具 → 登录凭证”中保存 token，避免启动时转到沙箱外的浏览器。",
+                "Save a token under Tools → Sign-in so launch does not fall back to a browser outside the sandbox."
+            )
         case .desktopInstall:
             if session.desktopInstallation?.supportsIsolatedLaunch == false {
                 return text(
@@ -1713,7 +1749,7 @@ struct SandboxPage: View {
         case .chooseExchange:
             chooseFolder(for: $session.configuration.exchangePath)
         case .authentication:
-            AppNavigationRequest.request(.protection, protectionSection: .authentication)
+            AppNavigationRequest.request(.authentication)
         case .desktopInstall:
             if let url = URL(string: "https://claude.ai/download") {
                 NSWorkspace.shared.open(url)
@@ -1788,16 +1824,20 @@ struct SandboxPage: View {
     }
 
     private func folderRow(title: String, value: Binding<String>, placeholder: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 14) {
-            Text(title)
-                .foregroundStyle(.secondary)
-                .frame(width: 116, alignment: .leading)
-            TextField(placeholder, text: value)
-                .textFieldStyle(.roundedBorder)
-            Button(text("选择…", "Choose…")) {
-                chooseFolder(for: value)
+        LabeledContent {
+            HStack(spacing: 8) {
+                TextField(placeholder, text: value)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel(title)
+                Button(text("选择…", "Choose…")) {
+                    chooseFolder(for: value)
+                }
+                .accessibilityLabel(text("选择\(title)", "Choose \(title)"))
             }
+        } label: {
+            Text(title)
         }
+        .accessibilityElement(children: .contain)
     }
 
     private func chooseFolder(for value: Binding<String>) {
@@ -1864,6 +1904,15 @@ private enum SandboxGuideStepState {
         case .current: return "arrow.right"
         case .pending: return "circle"
         case .attention: return "exclamationmark"
+        }
+    }
+
+    var accessibilityValue: String {
+        switch self {
+        case .complete: return L10n.resolvedEnglish ? "Complete" : "已完成"
+        case .current: return L10n.resolvedEnglish ? "Current step" : "当前步骤"
+        case .pending: return L10n.resolvedEnglish ? "Pending" : "待完成"
+        case .attention: return L10n.resolvedEnglish ? "Needs attention" : "需要处理"
         }
     }
 }

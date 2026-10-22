@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import GuardCore
 @testable import Routekeeper
 
@@ -424,16 +425,54 @@ final class PresentationTests: XCTestCase {
     }
 
     @MainActor
-    func testSandboxIsTopLevelNavigationAndNotAProtectionSubsection() throws {
+    func testSandboxProtectionAndAuthenticationAreTopLevelNavigation() throws {
         let pages = GuardPage.allCases
         XCTAssertTrue(pages.contains(.sandbox))
         XCTAssertLessThan(try XCTUnwrap(pages.firstIndex(of: .sandbox)),
-                          try XCTUnwrap(pages.firstIndex(of: .protection)))
+                          try XCTUnwrap(pages.firstIndex(of: .networkProtection)))
         XCTAssertEqual(GuardPage.sandbox.title, "沙箱")
-        XCTAssertFalse(ProtectionSection.allCases.map(\.rawValue).contains("sandbox"))
-        XCTAssertFalse(ProtectionSection.allCases.map(\.rawValue).contains("settings"))
-        XCTAssertEqual(ProtectionSection.allCases, [.authentication, .networkSettings])
+        XCTAssertEqual(GuardPage.networkProtection.title, "网络保护")
+        XCTAssertEqual(GuardPage.authentication.title, "Claude Code 登录凭证")
+        XCTAssertEqual(GuardPage.authentication.navigationTitle, "登录凭证")
+        XCTAssertTrue(GuardPage.primaryNavigation.contains(.networkProtection))
+        XCTAssertFalse(GuardPage.primaryNavigation.contains(.authentication))
+        XCTAssertTrue(GuardPage.toolNavigation.contains(.authentication))
+        XCTAssertEqual(GuardPage.toolNavigation, [.authentication, .activity, .cleanup])
         XCTAssertEqual(SandboxSection.allCases, [.overview, .scope, .network, .diagnostics])
+    }
+
+    @MainActor
+    func testMenuBarContentGrowsWithAccessibilityTextScale() {
+        let suite = "guard-menu-accessibility-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let previousScale = UserDefaults.standard.object(forKey: AppTextScale.storageKey)
+        let delegate = RoutekeeperAppDelegate()
+        defer {
+            delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+            defaults.removePersistentDomain(forName: suite)
+            if let previousScale {
+                UserDefaults.standard.set(previousScale, forKey: AppTextScale.storageKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppTextScale.storageKey)
+            }
+        }
+        let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
+
+        func fittingSize(at scale: AppTextScale) -> NSSize {
+            UserDefaults.standard.set(scale.rawValue, forKey: AppTextScale.storageKey)
+            let host = NSHostingView(
+                rootView: GuardMenu(store: store, appDelegate: delegate)
+            )
+            host.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize
+        }
+
+        let regular = fittingSize(at: .standard)
+        let accessible = fittingSize(at: .extraLarge)
+
+        XCTAssertEqual(regular.width, 300, accuracy: 1)
+        XCTAssertGreaterThan(accessible.height, regular.height)
     }
 
     @MainActor

@@ -4,6 +4,7 @@ import SwiftUI
 struct NetworkSettingsPage: View {
     @Bindable var store: GuardStore
 
+    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
     @State private var confirmClearHistory = false
     @State private var confirmClearReports = false
@@ -16,19 +17,13 @@ struct NetworkSettingsPage: View {
         VStack(alignment: .leading, spacing: 16) {
             if let lockHint {
                 Label(lockHint, systemImage: "lock.shield")
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        Color.primary.opacity(0.045),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
+                    .appSurface(.inset, corner: 10)
             }
-            scopeAndModeCard
-            exitsAndProbesCard
-            responseAndPrivacyCard
+            settingsWorkspace
         }
         .confirmationDialog(
             text("清除本机出口历史？", "Clear local exit history?"),
@@ -58,12 +53,24 @@ struct NetworkSettingsPage: View {
         }
     }
 
-    private var scopeAndModeCard: some View {
-        GuardCard(
-            title: text("保护范围与方式", "Protection scope and mode"),
-            subtitle: text("保护对象与失败关闭方式。",
-                           "Protected apps and fail-closed behavior.")
-        ) {
+    private var settingsWorkspace: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            scopeAndModeSection
+            AppHairline().padding(.horizontal, 20)
+            exitsAndProbesSection
+            AppHairline().padding(.horizontal, 20)
+            responseAndPrivacySection
+        }
+        .appSurface(.primary)
+    }
+
+    private var scopeAndModeSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AppSectionHeading(
+                title: text("保护范围与方式", "Protection scope and mode"),
+                subtitle: text("保护对象与失败关闭方式。",
+                               "Protected apps and fail-closed behavior.")
+            )
             VStack(alignment: .leading, spacing: 16) {
                 settingsSectionTitle(text("保护对象", "Protected apps"))
                 protectToggle(
@@ -92,21 +99,22 @@ struct NetworkSettingsPage: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 460)
+                .accessibilityLabel(text("保护方式", "Protection mode"))
                 .accessibilityIdentifier("network-settings-protection-mode")
 
                 Text(modeExplanation)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
                     Label(text("系统过滤", "System filter"), systemImage: "line.3.horizontal.decrease.circle")
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                     Spacer()
                     Text(store.networkFilter.canInstall
                          ? text("当前构建可用", "Available in this build")
                          : text("当前签名不可用", "Unavailable with this signature"))
-                        .font(.caption.weight(.medium))
+                        .routekeeperFont(.caption, weight: .medium)
                         .foregroundStyle(store.networkFilter.canInstall ? appAccent : Color.orange)
                 }
                 if !store.networkFilter.canInstall {
@@ -114,21 +122,23 @@ struct NetworkSettingsPage: View {
                         "当前为临时签名构建，无法启用系统扩展。分流与 Claude-only 仍需在代理客户端配置。",
                         "This temporary-signature build cannot install the system extension. Split routing and Claude-only rules still require proxy-client configuration."
                     ))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .disabled(settingsLocked)
         }
+        .padding(20)
     }
 
-    private var exitsAndProbesCard: some View {
-        GuardCard(
-            title: text("出口与检查参数", "Exits and check parameters"),
-            subtitle: text("目标出口、代理客户端与探测。",
-                           "Target exits, proxy client and probes.")
-        ) {
+    private var exitsAndProbesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AppSectionHeading(
+                title: text("出口与检查参数", "Exits and check parameters"),
+                subtitle: text("目标出口、代理客户端与探测。",
+                               "Target exits, proxy client and probes.")
+            )
             VStack(alignment: .leading, spacing: 16) {
                 settingsSectionTitle(text("固定出口", "Fixed exits"))
                 fixedExitRow(
@@ -144,9 +154,7 @@ struct NetworkSettingsPage: View {
                 AppHairline()
 
                 settingsSectionTitle(text("探测参数", "Probe settings"))
-                HStack(spacing: 12) {
-                    Text(text("代理客户端", "Proxy client"))
-                        .frame(width: 132, alignment: .leading)
+                LabeledContent {
                     Menu {
                         ForEach(ProxyClient.allCases, id: \.self) { client in
                             Button(client.title) {
@@ -156,26 +164,34 @@ struct NetworkSettingsPage: View {
                     } label: {
                         Text(store.settings.proxyClient.title)
                     }
+                    .accessibilityLabel(text("代理客户端", "Proxy client"))
+                    .accessibilityValue(store.settings.proxyClient.title)
                     .accessibilityIdentifier("network-settings-proxy-client")
-                    Spacer()
+                } label: {
+                    Text(text("代理客户端", "Proxy client"))
                 }
+                .accessibilityElement(children: .contain)
 
-                HStack(spacing: 12) {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        TextField("1–300", value: $store.settings.pollInterval, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90 * textScale)
+                            .accessibilityLabel(text("检查间隔（秒）", "Check interval in seconds"))
+                            .accessibilityIdentifier("network-settings-poll-interval")
+                        Text(text("秒", "seconds"))
+                            .foregroundStyle(.secondary)
+                        Stepper("", value: $store.settings.pollInterval, in: 1...300, step: 1)
+                            .labelsHidden()
+                            .accessibilityLabel(text("检查间隔", "Check interval"))
+                    }
+                } label: {
                     Text(text("检查间隔", "Check interval"))
-                        .frame(width: 132, alignment: .leading)
-                    TextField("1–300", value: $store.settings.pollInterval, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 90)
-                        .accessibilityIdentifier("network-settings-poll-interval")
-                    Text(text("秒", "seconds"))
-                        .foregroundStyle(.secondary)
-                    Stepper("", value: $store.settings.pollInterval, in: 1...300, step: 1)
-                        .labelsHidden()
-                    Spacer()
                 }
+                .accessibilityElement(children: .contain)
                 if !store.settings.validInterval {
                     Text(text("请输入 1–300 秒。", "Enter a value from 1 to 300."))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.orange)
                 }
                 Toggle(
@@ -191,14 +207,16 @@ struct NetworkSettingsPage: View {
             }
             .disabled(settingsLocked)
         }
+        .padding(20)
     }
 
-    private var responseAndPrivacyCard: some View {
-        GuardCard(
-            title: text("异常与本地数据", "Incidents and local data"),
-            subtitle: text("异常处理、第三方查询与本机记录。",
-                           "Incident handling, third-party lookup and local evidence.")
-        ) {
+    private var responseAndPrivacySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AppSectionHeading(
+                title: text("异常与本地数据", "Incidents and local data"),
+                subtitle: text("异常处理、第三方查询与本机记录。",
+                               "Incident handling, third-party lookup and local evidence.")
+            )
             VStack(alignment: .leading, spacing: 16) {
                 settingsSectionTitle(text("异常处理", "On incident"))
                 Picker(text("检测到异常时", "On incident"), selection: $store.settings.action) {
@@ -207,10 +225,9 @@ struct NetworkSettingsPage: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 430)
                 .disabled(settingsLocked)
                 Text(store.settings.action == .terminate ? L("action.terminate.hint") : L("action.notify.hint"))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -227,7 +244,7 @@ struct NetworkSettingsPage: View {
                     "手动体检会把出口 IP 发送给 ipwho.is / ipapi.is。",
                     "Manual checks send the exit IP to ipwho.is / ipapi.is."
                 ))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -257,10 +274,11 @@ struct NetworkSettingsPage: View {
                     "最近两次报告和最多 20 条出口历史仅保存在本机。",
                     "The two latest reports and up to 20 exits stay on this Mac."
                 ))
-                .font(.caption2)
+                .routekeeperFont(.caption2)
                 .foregroundStyle(.tertiary)
             }
         }
+        .padding(20)
     }
 
     private var settingsLocked: Bool {
@@ -297,36 +315,45 @@ struct NetworkSettingsPage: View {
 
     private func settingsSectionTitle(_ value: String) -> some View {
         Text(value)
-            .font(.caption.weight(.semibold))
+            .routekeeperFont(.caption, weight: .semibold)
             .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var textScale: CGFloat {
+        (AppTextScale(rawValue: textScaleRaw) ?? .standard).multiplier
     }
 
     @ViewBuilder
     private func fixedExitRow(family: IPFamily, label: String, placeholder: String) -> some View {
         let availabilityKnown = store.activeFamilies != nil
         let available = family == .ipv4 || !availabilityKnown || store.activeFamilies?.contains(family) == true
-        HStack(spacing: 10) {
+        LabeledContent {
+            HStack(spacing: 10) {
+                TextField(placeholder, text: Binding(
+                    get: { store.settings.fixedExit(for: family) },
+                    set: { store.settings.setFixedExit($0, for: family) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .routekeeperFont(.body, design: .monospaced)
+                .accessibilityLabel(label)
+                .accessibilityIdentifier("network-settings-fixed-exit-\(family.rawValue)")
+                Button {
+                    Task { await store.adoptObservedExit(family: family) }
+                } label: {
+                    Label(L("action.autoExit"), systemImage: "wand.and.stars")
+                }
+                .disabled(!available || store.monitoring || store.checking)
+                if !available {
+                    Text(text("未启用，已关闭", "Disabled on this Mac"))
+                        .routekeeperFont(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } label: {
             Label(label, systemImage: family == .ipv4 ? "4.circle" : "6.circle")
-                .frame(width: 132, alignment: .leading)
-            TextField(placeholder, text: Binding(
-                get: { store.settings.fixedExit(for: family) },
-                set: { store.settings.setFixedExit($0, for: family) }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-            .accessibilityIdentifier("network-settings-fixed-exit-\(family.rawValue)")
-            Button {
-                Task { await store.adoptObservedExit(family: family) }
-            } label: {
-                Label(L("action.autoExit"), systemImage: "wand.and.stars")
-            }
-            .disabled(!available || store.monitoring || store.checking)
-            if !available {
-                Text(text("未启用，已关闭", "Disabled on this Mac"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
+        .accessibilityElement(children: .contain)
         .disabled(!available || store.monitoring || store.checking)
     }
 
@@ -342,7 +369,7 @@ struct NetworkSettingsPage: View {
             Label(label, systemImage: icon)
             if !available {
                 Text(unavailableHint)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -352,6 +379,7 @@ struct NetworkSettingsPage: View {
             ))
             .toggleStyle(.switch)
             .labelsHidden()
+            .accessibilityLabel(label)
             .disabled(!available)
         }
     }

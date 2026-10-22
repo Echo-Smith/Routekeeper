@@ -8,6 +8,7 @@ private let egressAccent = appAccent
 struct EgressAuditPage: View {
     @Bindable var store: GuardStore
     @Bindable var audit: EgressAuditController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var embedded = false
     var compact = false
     @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
@@ -28,13 +29,13 @@ struct EgressAuditPage: View {
                     GuardCard(
                         title: text("尚无出口体检结果", "No egress check yet"),
                         subtitle: text(
-                            "完整证据会在运行体检后显示。检查参数与隐私选项在“保护 > 网络保护”中管理。",
-                            "Full evidence appears after a check. Check parameters and privacy options are managed in Protection > Network protection."
+                            "完整证据会在运行体检后显示。检查参数与隐私选项在“网络保护”中管理。",
+                            "Full evidence appears after a check. Check parameters and privacy options are managed in Network protection."
                         )
                     ) {
                         Text(text("运行上方“完整体检”后，这里会显示出口、服务、IPv6 与历史证据。",
                                   "Run the full check above to populate exit, service, IPv6 and history evidence here."))
-                            .font(.callout)
+                            .routekeeperFont(.callout)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -113,7 +114,7 @@ struct EgressAuditPage: View {
 
             Text(text("脱敏报告会移除公网 IP、MAC 地址等可识别字段；原始报告仍只保存在本机。",
                       "The redacted report removes public IPs, MAC addresses and other identifying fields. Raw reports stay on this Mac."))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -133,7 +134,7 @@ struct EgressAuditPage: View {
                 .accessibilityIdentifier("egress-advanced-options")
             Text(text("默认关闭。开启并手动运行体检后，出口 IP 会发送给 ipwho.is / ipapi.is；自动体检不会发送。",
                       "Off by default. When enabled and a manual check runs, the exit IP is sent to ipwho.is / ipapi.is. Automatic checks never send it."))
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -142,19 +143,19 @@ struct EgressAuditPage: View {
     @ViewBuilder
     private var feedbackMessages: some View {
         if !audit.notice.isEmpty {
-            Text(audit.notice).font(.callout).foregroundStyle(.orange)
+            Text(audit.notice).routekeeperFont(.callout).foregroundStyle(.orange)
         }
         if !exportNotice.isEmpty {
             Label(exportNotice, systemImage: exportNotice.contains(text("失败", "failed"))
                   ? "exclamationmark.circle" : "checkmark.circle")
-                .font(.caption)
+                .routekeeperFont(.caption)
                 .foregroundStyle(exportNotice.contains(text("失败", "failed")) ? Color.orange : egressAccent)
         }
     }
 
     private var detailsToggle: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                 showDetails.toggle()
             }
         } label: {
@@ -163,22 +164,22 @@ struct EgressAuditPage: View {
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(text("检查详情与历史记录", "Detailed evidence and history"))
-                        .font(.system(size: 15, weight: .semibold))
+                        .routekeeperFont(.headline)
                     Text(text("展开查看各项检测结果、IP 信息和历史变化。",
                               "Explore network evidence, context and history without interrupting the assessment above."))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .routekeeperFont(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text(showDetails ? text("收起", "Hide") : text("查看", "View"))
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     .foregroundStyle(appAccent)
                 Image(systemName: showDetails ? "chevron.up" : "chevron.down")
-                    .font(.caption.weight(.semibold))
+                    .routekeeperFont(.caption, weight: .semibold)
                     .foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
         .padding(16)
         .cardSurface(corner: 18)
     }
@@ -201,16 +202,18 @@ struct EgressAuditPage: View {
         VStack(alignment: .leading, spacing: 12) {
             detailGroupHeader(
                 title: text("上下文与历史", "Context and history"),
-                subtitle: text("第三方 IP 信息、时区、使用提醒与本机出口变化记录。",
-                               "Third-party intelligence, time zone, guidance and local exit history."),
+                subtitle: text("第三方 IP 信息、时区与本机出口变化记录。",
+                               "Third-party intelligence, time zone and local exit history."),
                 symbol: "clock.arrow.circlepath"
             )
             .padding(.top, 4)
             intelligenceCard(report)
             timeZoneCard(report)
-            guidanceCard
             historyCard
-            caveatCard
+            if !compact {
+                guidanceCard
+                caveatCard
+            }
         }
     }
 
@@ -223,9 +226,9 @@ struct EgressAuditPage: View {
                 .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .routekeeperFont(.callout, weight: .semibold)
                 Text(subtitle)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -269,7 +272,7 @@ struct EgressAuditPage: View {
                 if let report = audit.report {
                     Text((audit.lastRunTrigger?.title ?? text("体检", "Checked"))
                          + " · " + report.auditedAt.formatted(date: .abbreviated, time: .standard))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .routekeeperFont(.caption).foregroundStyle(.secondary)
                 }
             }
             Toggle(text("查询第三方 IP 信息（会向外部服务发送出口 IP）",
@@ -278,31 +281,31 @@ struct EgressAuditPage: View {
                 .toggleStyle(.switch)
             Text(text("自动体检会在 App 启动后、网络变化后以及每 \(store.automaticEgressAuditIntervalMinutes) 分钟运行；自动体检始终不查询第三方 IP 信息。手动运行只使用 45 秒内的自检快照，过期会先自动复核。",
                       "Automatic checks run after launch, after network changes and every \(store.automaticEgressAuditIntervalMinutes) minutes. Automatic checks never query third-party intelligence. Manual checks use a snapshot no older than 45 seconds and refresh it first when needed."))
-                .font(.caption).foregroundStyle(.secondary)
+                .routekeeperFont(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !audit.notice.isEmpty {
-                Text(audit.notice).font(.callout).foregroundStyle(.orange)
+                Text(audit.notice).routekeeperFont(.callout).foregroundStyle(.orange)
             }
             if !exportNotice.isEmpty {
                 Label(exportNotice, systemImage: exportNotice.contains(text("失败", "failed"))
                       ? "exclamationmark.circle" : "checkmark.circle")
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(exportNotice.contains(text("失败", "failed")) ? Color.orange : egressAccent)
             }
             Text(text("第三方 IP 信息默认关闭。只有打开上方开关并运行体检后，出口 IP 才会发送给 ipwho.is / ipapi.is。Claude 服务的 TLS 可达性探测始终由本机发起。",
                       "Third-party IP intelligence is off by default. The exit IP is sent to ipwho.is / ipapi.is only after enabling the switch and running a check. Claude TLS reachability probes always originate locally."))
-                .font(.caption).foregroundStyle(.secondary)
+                .routekeeperFont(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if audit.report != nil || audit.previousReport != nil {
                 HStack {
                     Text(text("最近两次完整报告只保存在本机，可随时清除。",
                               "The two most recent full reports stay on this Mac and can be cleared at any time."))
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .routekeeperFont(.caption).foregroundStyle(.tertiary)
                     Spacer()
                     Button(text("清除已保存报告", "Clear stored reports")) {
                         confirmClearReports = true
                     }
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                 }
             }
         }
@@ -325,12 +328,12 @@ struct EgressAuditPage: View {
                                  "A limited Routekeeper observation, not an Anthropic risk-control or account-action decision.")) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: assessmentSymbol(report.assessment.level))
-                    .font(.title2)
+                    .routekeeperFont(.title2)
                     .foregroundStyle(assessmentColor(report.assessment.level))
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(assessmentTitle(report.assessment.level)).font(.headline)
+                    Text(assessmentTitle(report.assessment.level)).routekeeperFont(.headline)
                     Text(assessmentSubtitle(report.assessment.level))
-                        .font(.callout).foregroundStyle(.secondary)
+                        .routekeeperFont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
@@ -339,14 +342,14 @@ struct EgressAuditPage: View {
                 Label(text("出口已变化：上次 \(drift.previousIP)，本次 \(drift.currentIP)",
                            "Exit changed: \(drift.previousIP) → \(drift.currentIP)"),
                       systemImage: "arrow.triangle.swap")
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     .foregroundStyle(.orange)
             }
             if !report.assessment.findings.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(report.assessment.findings, id: \.self) { finding in
                         Label(finding.localizedDescription, systemImage: finding == .thirdPartyDisabled ? "info.circle" : "exclamationmark.circle")
-                            .font(.callout)
+                            .routekeeperFont(.callout)
                             .foregroundStyle(finding == .thirdPartyDisabled ? Color.secondary : Color.orange)
                     }
                 }
@@ -373,7 +376,7 @@ struct EgressAuditPage: View {
                          + comparison.currentAuditedAt.formatted(date: .abbreviated, time: .shortened)
                          + " · " + assessmentTitle(comparison.currentLevel))
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .routekeeperFont(.caption).foregroundStyle(.secondary)
 
                 if !comparison.hasChanges {
                     Label(text("未发现可见变化", "No visible change"),
@@ -432,12 +435,12 @@ struct EgressAuditPage: View {
                         ForEach(comparison.addedFindings, id: \.self) { finding in
                             Label(text("新增：", "New: ") + finding.localizedDescription,
                                   systemImage: "exclamationmark.circle.fill")
-                                .font(.caption).foregroundStyle(.orange)
+                                .routekeeperFont(.caption).foregroundStyle(.orange)
                         }
                         ForEach(comparison.resolvedFindings, id: \.self) { finding in
                             Label(text("已消失：", "Resolved: ") + finding.localizedDescription,
                                   systemImage: "checkmark.circle.fill")
-                                .font(.caption).foregroundStyle(egressAccent)
+                                .routekeeperFont(.caption).foregroundStyle(egressAccent)
                         }
                     }
                 }
@@ -448,10 +451,10 @@ struct EgressAuditPage: View {
     private func changeRow(_ title: String, from: String, to: String,
                            warning: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(.caption.weight(.medium))
-            Text(from).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-            Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
-            Text(to).font(.system(.caption, design: .monospaced))
+            Text(title).routekeeperFont(.caption, weight: .medium)
+            Text(from).routekeeperFont(.caption, design: .monospaced).foregroundStyle(.secondary)
+            Image(systemName: "arrow.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
+            Text(to).routekeeperFont(.caption, design: .monospaced)
                 .foregroundStyle(warning ? Color.orange : egressAccent)
             Spacer(minLength: 0)
         }
@@ -466,21 +469,21 @@ struct EgressAuditPage: View {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: family.family == .ipv4 ? "4.circle.fill" : "6.circle.fill")
                             .foregroundStyle(family.targetMismatch ? Color.orange : stateColor(family.state))
-                            .font(.title3)
+                            .routekeeperFont(.title3)
                         VStack(alignment: .leading, spacing: 5) {
                             HStack {
-                                Text(family.family.displayName).font(.callout.weight(.semibold))
+                                Text(family.family.displayName).routekeeperFont(.callout, weight: .semibold)
                                 Text(family.targetMismatch ? text("与固定目标不一致", "target mismatch") : stateTitle(family.state))
-                                    .font(.caption.weight(.medium))
+                                    .routekeeperFont(.caption, weight: .medium)
                                     .foregroundStyle(family.targetMismatch ? Color.orange : stateColor(family.state))
                             }
                             Text(text("系统路径  ", "System   ") + (family.directIP ?? text("未取得", "not observed")))
-                                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                                .routekeeperFont(.caption, design: .monospaced).textSelection(.enabled)
                             Text(text("代理路径  ", "Proxy    ") + (family.proxiedIP ?? text("未配置/未取得", "not configured/observed")))
-                                .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                                .routekeeperFont(.caption, design: .monospaced).textSelection(.enabled)
                             if let target = family.targetIP {
                                 Text(text("固定目标  ", "Target   ") + target + (family.targetMismatch ? text(" · 不一致", " · mismatch") : ""))
-                                    .font(.system(.caption, design: .monospaced))
+                                    .routekeeperFont(.caption, design: .monospaced)
                                     .foregroundStyle(family.targetMismatch ? Color.orange : Color.secondary)
                             }
                         }
@@ -493,7 +496,7 @@ struct EgressAuditPage: View {
             if let primary = report.primaryIP {
                 Divider().padding(.vertical, 3)
                 Text(text("当前主出口：", "Primary exit: ") + primary)
-                    .font(.system(.callout, design: .monospaced).weight(.medium))
+                    .routekeeperFont(.callout, design: .monospaced, weight: .medium)
                     .textSelection(.enabled)
             }
         }
@@ -507,7 +510,7 @@ struct EgressAuditPage: View {
                 ForEach(EgressAudit.serviceTargets, id: \.self) { target in
                     HStack(alignment: .top, spacing: 12) {
                         Text(target)
-                            .font(.system(.callout, design: .monospaced).weight(.medium))
+                            .routekeeperFont(.callout, design: .monospaced, weight: .medium)
                             .frame(width: 190, alignment: .leading)
                         serviceValue(probe(target: target, route: .system, in: report), title: text("系统", "System"))
                         if report.proxyConfigured {
@@ -521,7 +524,7 @@ struct EgressAuditPage: View {
             }
             Text(text("探测不包含登录操作，不代表账号当前可登录或订阅有效。HTTP 状态由服务端策略决定。",
                       "The probe does not sign in and does not prove that the account can log in or that a subscription is active. HTTP status is controlled by the server."))
-                .font(.caption).foregroundStyle(.secondary)
+                .routekeeperFont(.caption).foregroundStyle(.secondary)
                 .padding(.top, 4)
         }
     }
@@ -533,12 +536,12 @@ struct EgressAuditPage: View {
             if let report {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: ipv6Symbol(report.state))
-                        .font(.title3)
+                        .routekeeperFont(.title3)
                         .foregroundStyle(ipv6Color(report.state))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(ipv6Title(report.state)).font(.callout.weight(.semibold))
+                        Text(ipv6Title(report.state)).routekeeperFont(.callout, weight: .semibold)
                         Text(ipv6Subtitle(report.state))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .routekeeperFont(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -548,13 +551,13 @@ struct EgressAuditPage: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if let local = report.localAddress {
                             Text(text("本机公网 IPv6  ", "Local public IPv6  ") + local)
-                                .font(.system(.caption, design: .monospaced))
+                                .routekeeperFont(.caption, design: .monospaced)
                                 .textSelection(.enabled)
                         }
                         Text(text("系统路径出口  ", "System exit       ") + (report.systemPublicExit ?? text("未取得", "not observed")))
-                            .font(.system(.caption, design: .monospaced))
+                            .routekeeperFont(.caption, design: .monospaced)
                         Text(text("代理路径出口  ", "Proxy exit        ") + (report.proxyPublicExit ?? text("未取得", "not observed")))
-                            .font(.system(.caption, design: .monospaced))
+                            .routekeeperFont(.caption, design: .monospaced)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -564,7 +567,7 @@ struct EgressAuditPage: View {
                         ForEach(report.probes) { probe in
                             HStack(alignment: .top, spacing: 10) {
                                 Text(probe.target)
-                                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                                    .routekeeperFont(.caption, design: .monospaced, weight: .medium)
                                     .frame(width: 170, alignment: .leading)
                                 VStack(alignment: .leading, spacing: 2) {
                                     if probe.resolvedAddresses.isEmpty {
@@ -582,7 +585,7 @@ struct EgressAuditPage: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
-                                .font(.system(.caption, design: .monospaced))
+                                .routekeeperFont(.caption, design: .monospaced)
                                 Spacer(minLength: 0)
                             }
                             .padding(.vertical, 7)
@@ -594,7 +597,7 @@ struct EgressAuditPage: View {
                 if [.directExposure, .tunnelUnconfirmed, .tunnelExitMismatch, .unknown].contains(report.state) {
                     Text(text("建议：不需要 IPv6 时，在代理客户端的 Claude 规则使用 ForceIPv4，或设置 ipv6: false；必须使用 IPv6 时，确保 AAAA 流量进入同一 TUN，且系统与代理 IPv6 出口一致。Routekeeper 不会自动修改代理配置。",
                               "Recommendation: when IPv6 is unnecessary, use ForceIPv4 for Claude rules or set ipv6: false in the proxy client. If IPv6 is required, ensure AAAA traffic enters the same TUN and system/proxy IPv6 exits match. Routekeeper does not modify proxy configuration."))
-                        .font(.caption).foregroundStyle(.orange)
+                        .routekeeperFont(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                     Button {
                         copyIPv6Guidance()
@@ -621,13 +624,13 @@ struct EgressAuditPage: View {
             if includeIntelligence && report.intelligenceStatus == .disabled {
                 Text(text("开关已打开；请重新运行体检以获取情报。",
                           "The switch is on. Rerun the egress check to fetch intelligence."))
-                    .font(.callout).foregroundStyle(.orange)
+                    .routekeeperFont(.callout).foregroundStyle(.orange)
             }
             switch report.intelligenceStatus {
             case .disabled:
                 Text(text("未启用第三方查询。本次仅完成本机出口一致性、Claude TLS 可达性和本地历史检查。",
                           "Third-party lookup is disabled. Only local exit consistency, Claude TLS reachability and local history were checked."))
-                    .font(.callout).foregroundStyle(.secondary)
+                    .routekeeperFont(.callout).foregroundStyle(.secondary)
             case .unavailable:
                 Label(text("情报服务未返回可用数据。未取得风险证据不等于低风险。",
                            "No usable intelligence was returned. Missing risk evidence does not mean low risk."),
@@ -641,29 +644,29 @@ struct EgressAuditPage: View {
                     ForEach(report.intelligence) { value in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text(value.ip).font(.system(.callout, design: .monospaced).weight(.semibold))
+                                Text(value.ip).routekeeperFont(.callout, design: .monospaced, weight: .semibold)
                                 if value.ip == report.primaryIP {
-                                    Text(text("主出口", "Primary")).font(.caption.weight(.medium))
+                                    Text(text("主出口", "Primary")).routekeeperFont(.caption, weight: .medium)
                                         .foregroundStyle(egressAccent)
                                 }
                                 Spacer()
                                 Text(value.sources.joined(separator: " + "))
-                                    .font(.caption2).foregroundStyle(.tertiary)
+                                    .routekeeperFont(.caption2).foregroundStyle(.tertiary)
                             }
                             Text(intelligenceSummary(value))
-                                .font(.callout).foregroundStyle(.secondary)
+                                .routekeeperFont(.callout).foregroundStyle(.secondary)
                             if value.hasRiskMetadata {
                                 let flags = value.riskFlags
                                 Text(flags.isEmpty
                                      ? text("情报源未标记 VPN/代理/Tor/滥用等属性。",
                                             "The source did not flag VPN/proxy/Tor/abuse attributes.")
                                      : text("情报标记：", "Intelligence flags: ") + flags.map(riskTitle).joined(separator: " · "))
-                                    .font(.caption)
+                                    .routekeeperFont(.caption)
                                     .foregroundStyle(flags.isEmpty ? Color.secondary : Color.orange)
                             } else {
                                 Text(text("该情报源未返回 VPN/代理/Tor/滥用等风险字段；不能据此推断安全。",
                                           "This source returned no VPN/proxy/Tor/abuse fields. This is not evidence of safety."))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .routekeeperFont(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .padding(12)
@@ -683,12 +686,12 @@ struct EgressAuditPage: View {
             if let check = report.timeZone {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: timeZoneSymbol(check.state))
-                        .font(.title3)
+                        .routekeeperFont(.title3)
                         .foregroundStyle(timeZoneColor(check.state))
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(timeZoneTitle(check.state)).font(.callout.weight(.semibold))
+                        Text(timeZoneTitle(check.state)).routekeeperFont(.callout, weight: .semibold)
                         Text(timeZoneSubtitle(check))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .routekeeperFont(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -700,14 +703,14 @@ struct EgressAuditPage: View {
                          + (check.exitIdentifier ?? text("未取得", "not observed"))
                          + (check.exitOffsetSeconds.map { " · " + timeZoneOffset($0) } ?? ""))
                 }
-                .font(.system(.caption, design: .monospaced))
+                .routekeeperFont(.caption, design: .monospaced)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
                 if check.state == .mismatch {
                     Text(text("建议：长期使用该出口时，将 macOS 时区调整为出口地区，或保持固定地区节点；不要在会话中频繁跨时区切换。",
                               "Recommendation: when using this exit long term, align the macOS time zone with the exit region or keep a fixed-region node. Avoid frequent cross-time-zone changes during a session."))
-                        .font(.caption).foregroundStyle(.orange)
+                        .routekeeperFont(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
@@ -744,7 +747,7 @@ struct EgressAuditPage: View {
                     symbol: "point.3.connected.trianglepath.dotted"
                 )
             }
-            .font(.callout)
+            .routekeeperFont(.callout)
         }
     }
 
@@ -772,10 +775,10 @@ struct EgressAuditPage: View {
                 HStack {
                     Text(text("出口历史只保存在本机，不自动上传；其中含敏感 IP 信息。",
                               "Exit history stays on this Mac and is not uploaded automatically. It contains sensitive IP data."))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .routekeeperFont(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Text(text("可在“保护 > 网络保护”中清除", "Clear it in Protection > Network protection"))
-                        .font(.caption2)
+                    Text(text("可在“网络保护”中清除", "Clear it in Network protection"))
+                        .routekeeperFont(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 if audit.history.count >= 2 {
@@ -785,12 +788,12 @@ struct EgressAuditPage: View {
                     ForEach(audit.history.prefix(8)) { entry in
                         HStack(spacing: 12) {
                             Text(entry.capturedAt.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .routekeeperFont(.caption).foregroundStyle(.secondary)
                                 .frame(width: 128, alignment: .leading)
-                            Text(entry.ip).font(.system(.caption, design: .monospaced))
+                            Text(entry.ip).routekeeperFont(.caption, design: .monospaced)
                             Spacer()
                             Text([entry.countryCode, entry.city, entry.asn].compactMap { $0 }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .routekeeperFont(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 7)
                         if entry.id != audit.history.prefix(8).last?.id { Divider() }
@@ -798,7 +801,7 @@ struct EgressAuditPage: View {
                 }
                 if audit.history.count > 8 {
                     Text(text("另有 \(audit.history.count - 8) 条较早记录", "\(audit.history.count - 8) older entries"))
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .routekeeperFont(.caption).foregroundStyle(.tertiary)
                 }
             }
         }
@@ -838,11 +841,11 @@ struct EgressAuditPage: View {
         ]
         return VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(text("出口变化时间线", "Exit timeline")).font(.caption.weight(.semibold))
+                Text(text("出口变化时间线", "Exit timeline")).routekeeperFont(.caption, weight: .semibold)
                 Spacer()
                 Text(text("\(labels.count) 个不同出口 · \(audit.history.count) 次记录",
                           "\(labels.count) exits · \(audit.history.count) observations"))
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .routekeeperFont(.caption2).foregroundStyle(.secondary)
             }
             Chart(historyPoints) { point in
                 LineMark(
@@ -875,7 +878,7 @@ struct EgressAuditPage: View {
             .frame(height: 155)
             Text(text("图表只显示替代标签，真实 IP 仍仅保存在本机下方记录中。",
                       "The chart uses replacement labels only. Real IPs remain solely in the local records below."))
-                .font(.caption2).foregroundStyle(.tertiary)
+                .routekeeperFont(.caption2).foregroundStyle(.tertiary)
         }
         .padding(10)
         .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
@@ -884,14 +887,14 @@ struct EgressAuditPage: View {
     private var caveatCard: some View {
         Text(text("边界：Routekeeper 不读取 Claude Cookie、认证 Token 或对话内容，也不复刻浏览器 Canvas/WebGL 指纹。出口体检与 Claude 服务可达性探测不能证明账号没有被限制，也不能预测封号；网络波动、Cloudflare 验证和第三方 IP 信息缺失都可能造成误判。",
                   "Boundary: Routekeeper does not read Claude cookies, auth tokens or conversations, and does not replicate browser Canvas/WebGL fingerprints. This check cannot prove an account is unrestricted or predict account actions. Network failures, Cloudflare challenges and missing third-party intelligence can all cause false conclusions."))
-            .font(.caption).foregroundStyle(.secondary)
+            .routekeeperFont(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 4)
     }
 
     private func serviceValue(_ probe: EgressServiceProbe?, title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(title).routekeeperFont(.caption2).foregroundStyle(.secondary)
             if let probe {
                 if probe.reachedTLS {
                     Text((probe.httpStatus.map { "HTTP \($0)" } ?? text("TLS 已连接", "TLS connected"))
@@ -905,7 +908,7 @@ struct EgressAuditPage: View {
                 Text(text("未测试", "Not tested")).foregroundStyle(.secondary)
             }
         }
-        .font(.system(.caption, design: .monospaced))
+        .routekeeperFont(.caption, design: .monospaced)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -1282,11 +1285,11 @@ private struct LeakEvidenceCard: View {
                 evidenceRow(dns)
             } else {
                 Text(text("DNS：未执行", "DNS: not run"))
-                    .font(.callout).foregroundStyle(.secondary)
+                    .routekeeperFont(.callout).foregroundStyle(.secondary)
             }
             if report.udpChecks.isEmpty {
                 Text(text("STUN/UDP：没有启用的地址族可测试", "STUN/UDP: no enabled address family to test"))
-                    .font(.callout).foregroundStyle(.secondary)
+                    .routekeeperFont(.callout).foregroundStyle(.secondary)
             } else {
                 ForEach(report.udpChecks) { check in
                     evidenceRow(check)
@@ -1302,9 +1305,9 @@ private struct LeakEvidenceCard: View {
                 .frame(width: 18)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
-                Text(evidence.title).font(.system(.callout, design: .monospaced).weight(.medium))
+                Text(evidence.title).routekeeperFont(.callout, design: .monospaced, weight: .medium)
                 Text(evidence.detail)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -1325,14 +1328,14 @@ private struct LeakEvidenceCard: View {
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(text("双栈连接：", "Dual-stack connection: ") + dual.target)
-                        .font(.callout.weight(.medium))
+                        .routekeeperFont(.callout, weight: .medium)
                     Text(dualStackSummary(dual))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(dual.fallbackSuspected ? Color.orange : Color.secondary)
                     HStack(spacing: 14) {
                         ForEach(dual.attempts) { attempt in
                             Text(attemptSummary(attempt))
-                                .font(.system(.caption2, design: .monospaced))
+                                .routekeeperFont(.caption2, design: .monospaced)
                                 .foregroundStyle(attempt.reachedTLS ? Color.secondary : Color.orange)
                         }
                     }
@@ -1344,7 +1347,7 @@ private struct LeakEvidenceCard: View {
     private var boundary: some View {
         Text(text("边界：DNS 仅测试当前全局解析器，不覆盖应用 DoH/分域 DNS；STUN 不等于完整 WebRTC；双栈检查是两次连续 HTTPS 尝试，不证明系统 Happy Eyeballs 的具体实现。未知或不完整结果不会当作通过。",
                   "Boundary: DNS tests only current global resolvers, not app DoH/split DNS. STUN is not a full WebRTC test. The dual-stack check uses two consecutive HTTPS attempts and does not prove the system's Happy Eyeballs behavior. Unknown or incomplete results are not a pass."))
-            .font(.caption)
+            .routekeeperFont(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }

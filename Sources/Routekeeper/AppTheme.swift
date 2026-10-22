@@ -3,27 +3,106 @@ import SwiftUI
 
 let appAccent = Color(red: 0, green: 0.443, blue: 0.89)
 
-struct AppPanelRow<Content: View>: View {
-    let label: String
-    @ViewBuilder var content: Content
+enum AppSurfaceTone {
+    case primary
+    case secondary
+    case inset
+}
+
+private struct AppSurfaceModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let tone: AppSurfaceTone
+    let corner: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        content
+            .background(background, in: shape)
+            .overlay {
+                if tone != .inset {
+                    shape.strokeBorder(
+                        Color(nsColor: .separatorColor)
+                            .opacity(colorScheme == .dark ? 0.46 : 0.58),
+                        lineWidth: 0.5
+                    )
+                }
+            }
+    }
+
+    private var background: Color {
+        switch tone {
+        case .primary:
+            return Color(nsColor: .textBackgroundColor)
+        case .secondary:
+            return Color(nsColor: .controlBackgroundColor)
+        case .inset:
+            return Color.primary.opacity(colorScheme == .dark ? 0.045 : 0.035)
+        }
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func routekeeperScrollEdge() -> some View {
+        if #available(macOS 26.0, *) {
+            self.scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func routekeeperScaledNavigationTitle() -> some View {
+        if #available(macOS 26.0, *) {
+            self.toolbar(removing: .title)
+        } else {
+            self
+        }
+    }
+
+    func appSurface(_ tone: AppSurfaceTone = .primary, corner: CGFloat = 14) -> some View {
+        modifier(AppSurfaceModifier(tone: tone, corner: corner))
+    }
+}
+
+struct BrandGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content.glassEffect(.clear.tint(.blue.opacity(0.58)), in: shape)
+        } else {
+            content.background(Color.blue, in: shape)
+        }
+    }
+}
+
+struct AppSectionHeading: View {
+    let title: String
+    var subtitle: String?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 116, alignment: .leading)
-            content
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .routekeeperFont(.headline)
+                .accessibilityAddTraits(.isHeader)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .routekeeperFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .font(.callout)
-        .padding(.vertical, 8)
     }
 }
 
 struct AppHairline: View {
     var body: some View {
         Rectangle()
-            .fill(Color.primary.opacity(0.07))
+            .fill(Color(nsColor: .separatorColor).opacity(0.55))
             .frame(height: 0.5)
     }
 }
@@ -37,12 +116,8 @@ extension View {
         modifier(RoutekeeperSecondaryButtonModifier())
     }
 
-    func routekeeperGlassCapsule() -> some View {
-        modifier(RoutekeeperCapsuleModifier())
-    }
-
-    func routekeeperSidebarSelection(selected: Bool, cornerRadius: CGFloat = 9) -> some View {
-        modifier(RoutekeeperSidebarSelectionModifier(selected: selected, cornerRadius: cornerRadius))
+    func routekeeperGlassCapsule(tint: Color = .clear) -> some View {
+        modifier(RoutekeeperCapsuleModifier(tint: tint))
     }
 }
 
@@ -50,7 +125,7 @@ private struct RoutekeeperProminentButtonModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         let styledContent = content
-            .font(.system(size: 14, weight: .semibold))
+            .routekeeperFont(.callout, weight: .semibold)
             .controlSize(.large)
             .buttonBorderShape(.roundedRectangle(radius: 10))
         if #available(macOS 26.0, *) {
@@ -64,7 +139,7 @@ private struct RoutekeeperProminentButtonModifier: ViewModifier {
 private struct RoutekeeperSecondaryButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .font(.system(size: 13.5, weight: .medium))
+            .routekeeperFont(.callout, weight: .medium)
             .controlSize(.large)
             .buttonStyle(.bordered)
             .buttonBorderShape(.roundedRectangle(radius: 9))
@@ -72,38 +147,18 @@ private struct RoutekeeperSecondaryButtonModifier: ViewModifier {
 }
 
 private struct RoutekeeperCapsuleModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    let tint: Color
+
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: Capsule())
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content.glassEffect(.regular.tint(tint), in: Capsule())
         } else {
             content
-                .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+                .background(.ultraThinMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
-        }
-    }
-}
-
-private struct RoutekeeperSidebarSelectionModifier: ViewModifier {
-    let selected: Bool
-    let cornerRadius: CGFloat
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(macOS 26.0, *) {
-            if selected {
-                content.glassEffect(
-                    .regular.tint(appAccent.opacity(0.18)).interactive(),
-                    in: shape
-                )
-            } else {
-                content
-            }
-        } else {
-            content.background(
-                shape.fill(selected ? AnyShapeStyle(appAccent.opacity(0.10)) : AnyShapeStyle(Color.clear))
-            )
         }
     }
 }

@@ -168,7 +168,7 @@ bash scripts/build-dmg.sh
 `build-dmg.sh` creates a draggable-to-Applications DMG for local distribution.
 Build output and signing profiles are excluded from Git.
 
-The test suite currently contains 145 tests covering route evidence, IPv6,
+The test suite currently contains 148 tests covering route evidence, IPv6,
 DNS/UDP probes, report redaction, monitoring state, process scope, capture
 validation, presentation behavior, local relay protocols, Seatbelt file and
 network enforcement, system-proxy alignment, localhost-listener blocking,

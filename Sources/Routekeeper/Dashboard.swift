@@ -1,16 +1,25 @@
+import AppKit
 import SwiftUI
 import GuardCore
 
 enum GuardPage: String, CaseIterable, Identifiable {
-    case home, inspection, sandbox, protection, settings
+    case home, inspection, sandbox, networkProtection, authentication, activity, cleanup
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .home: return L10n.resolvedEnglish ? "Home" : "首页"
+        case .home: return L10n.resolvedEnglish ? "Overview" : "概览"
         case .inspection: return L10n.resolvedEnglish ? "Network check" : "网络体检"
         case .sandbox: return L10n.resolvedEnglish ? "Sandbox" : "沙箱"
-        case .protection: return L10n.resolvedEnglish ? "Protection" : "保护"
-        case .settings: return L10n.resolvedEnglish ? "Settings" : "设置"
+        case .networkProtection: return L10n.resolvedEnglish ? "Network protection" : "网络保护"
+        case .authentication: return L10n.resolvedEnglish ? "Claude Code sign-in" : "Claude Code 登录凭证"
+        case .activity: return L10n.resolvedEnglish ? "Activity" : "运行记录"
+        case .cleanup: return L10n.resolvedEnglish ? "Cleanup" : "清理"
+        }
+    }
+    var navigationTitle: String {
+        switch self {
+        case .authentication: return L10n.resolvedEnglish ? "Sign-in" : "登录凭证"
+        default: return title
         }
     }
     var symbol: String {
@@ -18,52 +27,32 @@ enum GuardPage: String, CaseIterable, Identifiable {
         case .home: return "house"
         case .inspection: return "waveform.path.ecg.rectangle"
         case .sandbox: return "lock.shield"
-        case .protection: return "shield.lefthalf.filled"
-        case .settings: return "gearshape"
+        case .networkProtection: return "shield.lefthalf.filled"
+        case .authentication: return "key"
+        case .activity: return "clock.arrow.circlepath"
+        case .cleanup: return "trash"
         }
     }
-}
 
-enum ProtectionSection: String, CaseIterable, Identifiable {
-    case authentication, networkSettings
+    static let primaryNavigation: [GuardPage] = [
+        .home, .inspection, .sandbox, .networkProtection
+    ]
 
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .authentication: return L10n.resolvedEnglish ? "Claude Code sign-in" : "Claude Code 登录凭证"
-        case .networkSettings: return L10n.resolvedEnglish ? "Network protection" : "网络保护"
-        }
-    }
-}
-
-enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, events, cleanup, about
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .general: return L10n.resolvedEnglish ? "General" : "通用"
-        case .events: return L10n.resolvedEnglish ? "Run log" : "运行记录"
-        case .cleanup: return L10n.resolvedEnglish ? "Cleanup" : "清理"
-        case .about: return L10n.resolvedEnglish ? "About" : "关于"
-        }
-    }
+    static let toolNavigation: [GuardPage] = [
+        .authentication, .activity, .cleanup
+    ]
 }
 
 struct Dashboard: View {
     @Bindable var store: GuardStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page: GuardPage = .home
-    @State private var sidebarCollapsed = false
-    @State private var protectionSection: ProtectionSection = .authentication
-    @State private var settingsSection: SettingsSection = .general
+    @State private var detailPath: [String] = []
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sandboxSection: SandboxSection = .overview
-    @State private var headerHasScrolledContent = false
     private func text(_ zh: String, _ en: String) -> String { L10n.resolvedEnglish ? en : zh }
-    @ScaledMetric(relativeTo: .title2) private var pageHeaderSize: CGFloat = 22
-    @ScaledMetric(relativeTo: .headline) private var sidebarNameSize: CGFloat = 15
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
+    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
     @AppStorage("routekeeper.disclaimer-accepted-version") private var disclaimerAcceptedVersion = ""
     @State private var showDisclaimerGate = false
     @State private var confirmLocalDataInCleanup = false
@@ -78,46 +67,59 @@ struct Dashboard: View {
         }
         return store.policy.phase == .incident ? .orange : store.policy.phase == .armed ? appAccent : .secondary
     }
-    private var sidebarWidth: CGFloat { sidebarCollapsed ? 76 : 200 }
     private var pageHorizontalPadding: CGFloat { 22 }
+    private var textScale: CGFloat {
+        (AppTextScale(rawValue: textScaleRaw) ?? .standard).multiplier
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-            ZStack(alignment: .top) {
-                ScrollView {
-                    pageBody
-                        .padding(.horizontal, pageHorizontalPadding)
-                        .padding(.top, 76)
-                        .padding(.bottom, 26)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background {
-                            ScrollOffsetObserver { offset in
-                                setHeaderScrolled(offset > 12)
-                            }
-                            .frame(height: 0)
-                        }
-                }
-                .id(navigationIdentity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                pageHeader
+                .navigationSplitViewColumnWidth(min: 220, ideal: 228, max: 300)
+        } detail: {
+            NavigationStack(path: $detailPath) {
+            ScrollView {
+                pageBody
+                    .padding(.horizontal, pageHorizontalPadding)
+                    .padding(.top, 22)
+                    .padding(.bottom, 26)
+                    .frame(maxWidth: 1040, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .routekeeperScrollEdge()
+            .id(navigationIdentity)
+            .navigationDestination(for: String.self) { _ in
+                AppSettingsView(store: store)
+                    .navigationTitle(text("设置", "Settings"))
+                    .navigationSubtitle("")
+            }
+            .navigationTitle(page.navigationTitle)
+            .navigationSubtitle(currentSectionTitle ?? "")
+            .routekeeperScaledNavigationTitle()
+            .toolbar {
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .navigation) {
+                        Text(page.navigationTitle)
+                            .routekeeperFont(.title3, weight: .semibold)
+                            .tracking(-0.2)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.leading, 8)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                }
+                if page == .sandbox || page == .networkProtection {
+                    if #available(macOS 26.0, *) {
+                        ToolbarSpacer(.flexible)
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        pageStatusPill
+                    }
+                }
+            }
         }
-        .overlay(alignment: .topLeading) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.72))
-                .frame(width: 1)
-                .offset(x: sidebarWidth - 1)
-                .ignoresSafeArea(.container, edges: .top)
-                .allowsHitTesting(false)
         }
-        .ignoresSafeArea(.container, edges: .top)
-        .tint(appAccent)
+        .navigationSplitViewStyle(.balanced)
         .id(store.languageRevision)
-        .background(WindowDragHelper())
         .preferredColorScheme(appearanceOverride)
         .onAppear {
             applyNavigationRequest()
@@ -153,193 +155,159 @@ struct Dashboard: View {
     }
 
     private func applyNavigationRequest() {
-        let requestedSection = AppNavigationRequest.consumePendingProtectionSection()
-        let requestedSettings = AppNavigationRequest.consumePendingSettingsSection()
+        if AppNavigationRequest.consumeSettingsRequest() {
+            detailPath = ["settings"]
+            return
+        }
         if let requested = AppNavigationRequest.consumePendingPage() {
             selectPage(requested)
-        }
-        if let requestedSection {
-            protectionSection = requestedSection
-        }
-        if let requestedSettings {
-            settingsSection = requestedSettings
         }
     }
 
     var sidebar: some View {
-        VStack(spacing: 4) {
-            AppBadge(collapsed: sidebarCollapsed, symbol: store.symbol, tint: statusColor)
-                .padding(.bottom, sidebarCollapsed ? 14 : 10)
-            if !sidebarCollapsed {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(L("app.name")).font(.system(size: sidebarNameSize, weight: .semibold))
-                    Text(storeTitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .modifier(BrandGlassModifier())
+                    .accessibilityHidden(true)
+                Text(L("app.name"))
+                    .routekeeperFont(.title3, weight: .bold)
+                    .tracking(-0.25)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 18)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(L("app.name"))
+            .accessibilityValue(store.title)
+
+            List(selection: sidebarSelection) {
+                Section(text("主要", "Main")) {
+                    ForEach(GuardPage.primaryNavigation) { item in
+                        sidebarPageRow(item)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Section(text("工具", "Tools")) {
+                    ForEach(GuardPage.toolNavigation) { item in
+                        sidebarPageRow(item)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .tint(.clear)
+            .background(SidebarTableAppearance())
+
+            Divider()
+                .padding(.horizontal, 12)
+
+            Button {
+                detailPath = ["settings"]
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 18, alignment: .center)
+                    Text(text("设置", "Settings"))
+                        .routekeeperFont(.callout)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            VStack(spacing: 4) {
-                ForEach(GuardPage.allCases.filter { $0 != .settings }) { item in
-                    SidebarButton(page: item, selected: item == page, collapsed: sidebarCollapsed) {
-                        selectPage(item)
-                    }
-                    if item == page && !sidebarCollapsed {
-                        sidebarSubmenu(for: item)
-                            .padding(.top, 2)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-
-            Spacer(minLength: 12)
-
-            VStack(spacing: 4) {
-                if page == .settings && !sidebarCollapsed {
-                    sidebarSubmenu(for: .settings)
-                        .padding(.bottom, 2)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-                SidebarButton(page: .settings, selected: page == .settings, collapsed: sidebarCollapsed) {
-                    selectPage(.settings)
-                }
-                if !sidebarCollapsed {
-                    Text("v0.3.12").font(.caption2).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 2)
-                }
-            }
-            .padding(.horizontal, 10)
-        }
-        .frame(width: sidebarWidth)
-        .padding(.top, 48)
-        .padding(.bottom, 14)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .animation(.easeInOut(duration: 0.18), value: sidebarCollapsed)
-    }
-
-    @ViewBuilder
-    private func sidebarSubmenu(for page: GuardPage) -> some View {
-        switch page {
-        case .protection:
-            VStack(spacing: 2) {
-                ForEach(ProtectionSection.allCases) { section in
-                    SidebarSubButton(
-                        title: section.title,
-                        selected: protectionSection == section
-                    ) {
-                        headerHasScrolledContent = false
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            protectionSection = section
-                        }
-                    }
-                    .accessibilityIdentifier("protection-section-\(section.rawValue)")
-                }
-            }
-            .padding(.leading, 18)
-        case .settings:
-            VStack(spacing: 2) {
-                ForEach(SettingsSection.allCases) { section in
-                    SidebarSubButton(
-                        title: section.title,
-                        selected: settingsSection == section
-                    ) {
-                        headerHasScrolledContent = false
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            settingsSection = section
-                        }
-                    }
-                    .accessibilityIdentifier("settings-section-\(section.rawValue)")
-                }
-            }
-            .padding(.leading, 18)
-        case .home, .inspection, .sandbox:
-            EmptyView()
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("nav-settings")
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
         }
     }
 
-    var storeTitle: String {
-        if store.checking { return L("status.checking") }
-        return store.title
+    private func sidebarPageRow(_ item: GuardPage) -> some View {
+        Label {
+            Text(item.navigationTitle)
+                .routekeeperFont(.callout)
+        } icon: {
+            Image(systemName: item.symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .frame(width: 18, alignment: .center)
+        }
+        .foregroundStyle(.primary)
+        .tint(Color(nsColor: .labelColor))
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(detailPath.isEmpty && page == item ? Color.primary.opacity(0.10) : Color.clear)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 1)
+        )
+        .tag(item)
+        .accessibilityIdentifier("nav-\(item.rawValue)")
+        .accessibilityLabel(item.title)
+        .help(item.title)
     }
 
-    var pageHeader: some View {
-        HStack(spacing: 12) {
-            SidebarToggleButton(collapsed: sidebarCollapsed) {
-                withAnimation(.easeInOut(duration: 0.18)) { sidebarCollapsed.toggle() }
+    private var sidebarSelection: Binding<GuardPage?> {
+        Binding(
+            get: { detailPath.isEmpty ? page : nil },
+            set: { newValue in
+                guard let newValue else { return }
+                if newValue == page {
+                    detailPath.removeAll()
+                } else {
+                    selectPage(newValue)
+                }
             }
-            PageHeaderBreadcrumb(
-                pageTitle: page.title,
-                sectionTitle: currentSectionTitle,
-                onOpenRoot: { selectPage(page) }
-            )
-            .font(.system(size: pageHeaderSize, weight: .semibold))
-            .tracking(-0.45)
-            .lineLimit(1)
-            Spacer()
-            HStack(spacing: 7) {
-                Circle().fill(statusColor).frame(width: 6, height: 6)
-                Text(capsuleText).font(.callout.weight(.medium)).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .routekeeperGlassCapsule()
+        )
+    }
+
+    private var pageStatusPill: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 5, height: 5)
+                .accessibilityHidden(true)
+            Text(capsuleText)
+                .routekeeperFont(.caption, weight: .medium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 26)
-        .frame(maxWidth: .infinity, minHeight: 64)
-        .background {
-            if headerHasScrolledContent {
-                Rectangle().fill(.bar)
-                    .transition(.opacity)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if headerHasScrolledContent {
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor).opacity(0.48))
-                    .frame(height: 0.5)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.16), value: headerHasScrolledContent)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text("当前状态", "Current status"))
+        .accessibilityValue(capsuleText)
+        .accessibilityIdentifier("page-status")
     }
 
     private var currentSectionTitle: String? {
         switch page {
-        case .protection: return protectionSection.title
-        case .settings: return settingsSection.title
-        case .sandbox: return sandboxSection.title
-        case .home, .inspection: return nil
+        case .sandbox:
+            return sandboxSection == .overview ? nil : sandboxSection.title
+        case .home, .inspection, .networkProtection, .authentication, .activity, .cleanup: return nil
         }
     }
 
     private var navigationIdentity: String {
         switch page {
-        case .protection: return "protection-\(protectionSection.rawValue)"
-        case .settings: return "settings-\(settingsSection.rawValue)"
         case .sandbox: return "sandbox-\(sandboxSection.rawValue)"
-        case .home, .inspection: return page.rawValue
+        case .home, .inspection, .networkProtection, .authentication, .activity, .cleanup: return page.rawValue
         }
     }
 
     private func selectPage(_ newPage: GuardPage) {
-        if newPage == .protection {
-            protectionSection = .authentication
-        } else if newPage == .settings {
-            settingsSection = .general
-        } else if newPage == .sandbox {
+        detailPath.removeAll()
+        if newPage == .sandbox {
             sandboxSection = .overview
         }
-        headerHasScrolledContent = false
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             page = newPage
-        }
-    }
-
-    private func setHeaderScrolled(_ scrolled: Bool) {
-        guard scrolled != headerHasScrolledContent else { return }
-        withAnimation(.easeInOut(duration: 0.16)) {
-            headerHasScrolledContent = scrolled
         }
     }
 
@@ -380,86 +348,77 @@ struct Dashboard: View {
                     store: store,
                     audit: store.egressAudit,
                     onOpenNetworkSettings: {
-                        selectPage(.protection)
-                        protectionSection = .networkSettings
+                        selectPage(.networkProtection)
                     }
                 )
             }
         case .sandbox:
             SandboxPage(store: store, mode: .management, section: $sandboxSection)
-        case .protection: protectionPage
-        case .settings: settingsPage
+        case .networkProtection:
+            NetworkProtectionPage(store: store)
+        case .authentication:
+            AuthenticationPage(
+                controller: store.authentication,
+                launchAction: { store.launchFromAuthentication() }
+            )
+        case .activity: eventsPage
+        case .cleanup: cleanupPage
         }
     }
 
     var homePage: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             if store.settings.experimentalSandboxEnabled {
-                homeSandboxCard
-                HStack(alignment: .top, spacing: 16) {
-                    homeProtectionCard
-                    if store.settings.gatewayProtectionMode != .off {
-                        homeGatewayCard
-                    } else {
-                        homeEgressCard
-                    }
-                }
+                homeSandboxOverview
             } else {
-                homeStatusCard
-                if store.settings.gatewayProtectionMode != .off {
-                    homeGatewayCard
-                }
-                HStack(alignment: .top, spacing: 16) {
-                    homeProtectionCard
-                    homeEgressCard
-                }
+                homeStatusOverview
             }
+            homeDetailWorkspace
         }
     }
 
-    private var homeSandboxCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 16) {
+    private var homeSandboxOverview: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
                 Image(systemName: store.sandbox.statusSymbol)
-                    .font(.system(size: 25, weight: .light))
+                    .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(statusColor)
-                    .frame(width: 56, height: 56)
-                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(store.sandbox.statusTitle)
-                        .font(.system(size: 21, weight: .semibold))
+                        .routekeeperFont(.title2, weight: .semibold)
                         .tracking(-0.3)
                     Text(store.sandbox.message)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
                 Text(text("实验性", "Experimental"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .routekeeperFont(.caption, weight: .medium)
+                    .foregroundStyle(.tertiary)
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 18) {
                 Label(
                     store.sandbox.networkEnabled ? text("中继网络已开启", "Relay network on") : text("网络已关闭", "Network off"),
                     systemImage: store.sandbox.networkEnabled ? "network" : "wifi.slash"
                 )
-                .foregroundStyle(store.sandbox.networkEnabled ? appAccent : Color.orange)
+                .foregroundStyle(store.sandbox.networkEnabled ? Color.secondary : Color.orange)
                 Label(
                     store.sandbox.claudeRunning ? text("Claude 正在运行", "Claude running") : text("Claude 未运行", "Claude not running"),
                     systemImage: "terminal"
                 )
                 .foregroundStyle(.secondary)
             }
-            .font(.callout.weight(.medium))
+            .routekeeperFont(.callout, weight: .medium)
+
+            AppHairline()
 
             HStack {
                 Text(text("普通网络监控已暂停", "Ordinary monitoring is paused"))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -471,32 +430,46 @@ struct Dashboard: View {
                 .accessibilityIdentifier("home-open-sandbox")
             }
         }
-        .padding(22)
-        .cardSurface(corner: 22)
+        .padding(20)
+        .appSurface(.primary)
     }
 
-    private var homeStatusCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 16) {
+    private var homeStatusOverview: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
                 Image(systemName: store.symbol)
-                    .font(.system(size: 25, weight: .light))
+                    .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(statusColor)
-                    .frame(width: 56, height: 56)
-                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(headline).font(.system(size: 21, weight: .semibold)).tracking(-0.3)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(headline)
+                            .routekeeperFont(.title2, weight: .semibold)
+                            .tracking(-0.3)
+                        if showsInlineCheckAction {
+                            Button(action: homePrimaryAction) {
+                                Label(homePrimaryTitle, systemImage: homePrimarySymbol)
+                            }
+                            .routekeeperProminentButton()
+                            .controlSize(.regular)
+                            .disabled(store.checking)
+                            .accessibilityIdentifier("home-inline-check")
+                        }
+                    }
                     Text(store.notice.isEmpty ? L("overview.unmonitored.sub") : store.notice)
-                        .font(.callout).foregroundStyle(.secondary)
+                        .routekeeperFont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
                 if let snapshot = store.snapshot {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(homePassedChecks)/\(snapshot.checks.count)")
-                            .font(.system(size: 22, weight: .semibold, design: .rounded))
+                            .routekeeperFont(.title2, weight: .semibold, monospacedDigit: true)
+                            .fontDesign(.rounded)
                             .monospacedDigit()
                         Text(homeCheckSummary)
-                            .font(.caption2)
+                            .routekeeperFont(.caption2)
                             .foregroundStyle(homeAttentionChecks > 0 ? Color.orange : Color.secondary)
                     }
                 }
@@ -514,14 +487,16 @@ struct Dashboard: View {
                 Button { page = .inspection } label: {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                        Text(store.policy.reason).font(.callout).foregroundStyle(.primary)
+                            .accessibilityHidden(true)
+                        Text(store.policy.reason).routekeeperFont(.callout).foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").routekeeperFont(.caption).foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
                     }
                     .padding(12)
                     .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
             }
 
             AppHairline()
@@ -530,82 +505,117 @@ struct Dashboard: View {
                 if let snapshot = store.snapshot {
                     Text(text("最近体检 \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))",
                               "Last checked \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))"))
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text(L("capsule.noCheck")).font(.caption).foregroundStyle(.secondary)
+                        .routekeeperFont(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !store.monitoring {
-                    Button(text("重新检测", "Check again")) { page = .inspection }
-                        .buttonStyle(.plain).foregroundStyle(appAccent)
+                if !showsInlineCheckAction {
+                    Button(action: homePrimaryAction) {
+                        Label(homePrimaryTitle, systemImage: homePrimarySymbol)
+                    }
+                    .routekeeperProminentButton()
+                    .controlSize(.large)
+                    .disabled(store.checking)
+                    .accessibilityIdentifier(store.monitoring ? "stop-monitor" : "home-primary")
                 }
-                Button(action: homePrimaryAction) {
-                    Label(homePrimaryTitle, systemImage: homePrimarySymbol)
-                }
-                .routekeeperProminentButton()
-                .controlSize(.large)
-                .disabled(store.checking)
-                .accessibilityIdentifier(store.monitoring ? "stop-monitor" : "home-primary")
             }
         }
-        .padding(22)
-        .cardSurface(corner: 22)
+        .padding(20)
+        .appSurface(.primary)
     }
 
-    private var homeGatewayCard: some View {
+    private var homeDetailWorkspace: some View {
+        HStack(alignment: .top, spacing: 16) {
+            homeProtectionSection
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .appSurface(.primary)
+
+            Group {
+                if store.settings.gatewayProtectionMode != .off {
+                    homeGatewaySection
+                } else {
+                    homeEgressSection
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .appSurface(.primary)
+        }
+    }
+
+    private var homeGatewaySection: some View {
         let mode = store.settings.gatewayProtectionMode
         let status = store.gatewayVerification.status(for: mode)
-        return GuardCard(
-            title: text("代理网关", "Proxy gateway"),
-            subtitle: text(
-                "检查代理可用、节点断开失败关闭，以及代理退出后不会回落直连。",
-                "Check proxy reachability, fail-closed behavior with the node unavailable, and no direct fallback after the client exits."
-            )
-        ) {
-            HStack(spacing: 12) {
-                Image(systemName: homeGatewaySymbol(status))
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(homeGatewayColor(status))
-                    .frame(width: 38, height: 38)
-                    .background(
-                        homeGatewayColor(status).opacity(0.09),
-                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                AppSectionHeading(
+                    title: text("代理网关", "Proxy gateway"),
+                    subtitle: text(
+                        "检查代理可用、节点断开失败关闭，以及代理退出后不会回落直连。",
+                        "Check reachability and fail-closed behavior without a node or proxy client."
                     )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(homeGatewayTitle(status, mode: mode))
-                        .font(.callout.weight(.semibold))
-                    Text(homeGatewayModeTitle(mode))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
+                )
+                Spacer(minLength: 8)
                 Button(text("打开检查", "Open check")) {
                     selectPage(.inspection)
                 }
-                .routekeeperSecondaryButton()
+                .buttonStyle(.borderless)
+                .routekeeperFont(.callout, weight: .medium)
+                .foregroundStyle(appAccent)
                 .accessibilityIdentifier("home-gateway-open-check")
+            }
+
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: homeGatewaySymbol(status))
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(homeGatewayColor(status))
+                    .frame(width: 22)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(homeGatewayTitle(status, mode: mode))
+                        .routekeeperFont(.callout, weight: .semibold)
+                    Text(homeGatewayModeTitle(mode))
+                        .routekeeperFont(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
         }
     }
 
-    private var homeProtectionCard: some View {
-        GuardCard(
-            title: text("Claude 保护范围", "Claude protection"),
-            subtitle: text("应用是否纳入监控，以及发现异常后的处理方式。",
-                           "Which Claude apps are monitored and what happens after an incident.")
-        ) {
+    private var homeProtectionSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                AppSectionHeading(
+                    title: text("Claude 保护范围", "Claude protection"),
+                    subtitle: text("应用是否纳入监控，以及发现异常后的处理方式。",
+                                   "Which Claude apps are monitored and what happens after an incident.")
+                )
+                Spacer(minLength: 8)
+                Button {
+                    selectPage(.networkProtection)
+                } label: {
+                    Label(text("管理保护范围", "Manage protection"), systemImage: "chevron.right")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderless)
+                .routekeeperFont(.callout, weight: .medium)
+                .foregroundStyle(appAccent)
+                .accessibilityIdentifier("home-manage-protection")
+            }
+
             homeProtectionRow(kind: .desktop)
             AppHairline()
             homeProtectionRow(kind: .code)
             AppHairline()
             HStack(spacing: 10) {
                 Label(text("发现异常时", "On incident"), systemImage: "bell.badge")
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                 Spacer()
                 Text(store.settings.action == .notify
                      ? text("仅提醒", "Notify only")
                      : text("请求退出所选进程", "Request selected exits"))
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                     .foregroundStyle(store.settings.action == .notify ? Color.secondary : Color.orange)
             }
             AppHairline()
@@ -615,37 +625,24 @@ struct Dashboard: View {
                       : "checkmark.circle")
                     .foregroundStyle(store.events.contains(where: \.isAttention) ? Color.orange : Color.secondary)
                     .frame(width: 22)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(text("最近异常", "Latest incident"))
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                     Text(homeLatestAttentionText)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 if let incident = store.events.first(where: \.isAttention) {
                     Text(homeRelativeTime(incident.time))
-                        .font(.caption2)
+                        .routekeeperFont(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
-            HStack {
-                Spacer()
-                Button {
-                    selectPage(.protection)
-                    protectionSection = .networkSettings
-                } label: {
-                    Label(text("管理保护范围", "Manage protection"), systemImage: "chevron.right")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.plain)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(appAccent)
-                .accessibilityIdentifier("home-manage-protection")
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -662,7 +659,7 @@ struct Dashboard: View {
             guard enabled else { return (text("未保护", "Not protected"), .secondary) }
             guard installed else { return (text("未发现安装", "Not installed"), .orange) }
             if running > 0 {
-                return (text("\(running) 个进程", "\(running) running"), appAccent)
+                return (text("\(running) 个进程", "\(running) running"), Color.secondary)
             }
             return (text("已启用 · 等待启动", "On · waiting to launch"), .secondary)
         }()
@@ -671,30 +668,33 @@ struct Dashboard: View {
             Image(systemName: kind == .desktop ? "macwindow" : "terminal")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(kind == .desktop ? "Claude Desktop" : "Claude Code")
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                 Text(enabled
                      ? text("已纳入异常检测", "Included in incident checks")
                      : text("不会处理该应用的异常", "Excluded from incident handling"))
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .routekeeperFont(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
             Text(status.title)
-                .font(.caption.weight(.medium))
+                .routekeeperFont(.caption, weight: .medium)
                 .foregroundStyle(status.color)
         }
         .padding(.vertical, 5)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(status.title), \(kind == .desktop ? "Claude Desktop" : "Claude Code")")
     }
 
-    private var homeEgressCard: some View {
-        GuardCard(
+    private var homeEgressSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AppSectionHeading(
             title: text("最近出口体检", "Latest egress check"),
             subtitle: text("出口一致性、IPv6、服务可达性与自动体检节奏。",
                            "Exit consistency, IPv6, service reachability and automatic-check timing.")
-        ) {
+            )
+
             if let report = store.egressAudit.report {
                 homeSignalRow(
                     title: text("体检结论", "Assessment"),
@@ -725,46 +725,46 @@ struct Dashboard: View {
                         "\(report.services.filter(\.reachedTLS).count)/\(report.services.count) reachable"
                     ),
                     symbol: "checkmark.icloud",
-                    color: report.services.allSatisfy(\.reachedTLS) ? appAccent : .orange
+                    color: report.services.allSatisfy(\.reachedTLS) ? .secondary : .orange
                 )
                 if let drift = store.egressAudit.drift {
                     Label(text("出口已从 \(drift.previousIP) 变化为 \(drift.currentIP)",
                                "Exit changed from \(drift.previousIP) to \(drift.currentIP)"),
                           systemImage: "arrow.triangle.swap")
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(homeNextAuditText)
-                    .font(.caption2)
+                    .routekeeperFont(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text(text("最近 \(report.auditedAt.formatted(date: .abbreviated, time: .shortened))",
                               "Last \(report.auditedAt.formatted(date: .abbreviated, time: .shortened))"))
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .routekeeperFont(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Button(text("查看检查详情", "View evidence")) { selectPage(.inspection) }
-                        .buttonStyle(.plain)
-                        .font(.callout.weight(.medium))
+                        .buttonStyle(.borderless)
+                        .routekeeperFont(.callout, weight: .medium)
                         .foregroundStyle(appAccent)
                 }
             } else {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "waveform.path.ecg.rectangle")
-                        .font(.title3)
+                        .routekeeperFont(.title3)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(text("还没有出口体检结果", "No egress report yet"))
-                            .font(.callout.weight(.semibold))
+                            .routekeeperFont(.callout, weight: .semibold)
                         Text(text("完成体检后可在这里查看出口一致性、IPv6 路径与服务可达性。",
                                   "Run a check to see exit consistency, IPv6 routing and service reachability here."))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .routekeeperFont(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Text(homeNextAuditText)
-                    .font(.caption2)
+                    .routekeeperFont(.caption2)
                     .foregroundStyle(.tertiary)
                 Button {
                     selectPage(.inspection)
@@ -790,17 +790,17 @@ struct Dashboard: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(color)
                 .frame(width: 22)
-            Text(title).font(.callout).foregroundStyle(.secondary)
+            Text(title).routekeeperFont(.callout).foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(value)
-                .font(monospaced
-                      ? .system(.callout, design: .monospaced)
-                      : .callout)
+                .routekeeperFont(.callout, design: monospaced ? .monospaced : .default)
                 .foregroundStyle(color)
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
         }
         .padding(.vertical, 5)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(value)")
     }
 
     private var homePassedChecks: Int {
@@ -865,7 +865,7 @@ struct Dashboard: View {
 
     private func homeAssessmentColor(_ level: EgressAssessmentLevel) -> Color {
         switch level {
-        case .clear: return appAccent
+        case .clear: return .secondary
         case .attention: return .orange
         case .insufficient: return .secondary
         }
@@ -895,7 +895,7 @@ struct Dashboard: View {
 
     private func homeIPv6Color(_ state: IPv6ExposureState?) -> Color {
         switch state {
-        case .disabled, .tunneled: return appAccent
+        case .disabled, .tunneled: return .secondary
         case .noClaudePath: return .secondary
         case .tunnelUnconfirmed, .tunnelExitMismatch, .directExposure, .unknown, nil: return .orange
         }
@@ -904,7 +904,7 @@ struct Dashboard: View {
     var homePrimaryTitle: String {
         if store.monitoring { return L("action.stopMonitor") }
         if store.snapshot?.ready == true && canStartMonitoring { return L("action.startMonitor") }
-        return text("完成体检", "Run network check")
+        return text("立即体检", "Check now")
     }
 
     var homePrimarySymbol: String {
@@ -932,76 +932,28 @@ struct Dashboard: View {
             && (store.settings.target(for: .ipv4) != nil || store.settings.target(for: .ipv6) != nil)
     }
 
+    var showsInlineCheckAction: Bool {
+        !store.monitoring && !(store.snapshot?.ready == true && canStartMonitoring)
+    }
+
     func homeSummaryRow(id: String, title: String, symbol: String) -> some View {
         let check = store.snapshot?.checks.first { $0.id == id }
-        let color: Color = check?.level == .passed ? appAccent : check?.level == .failed ? .orange : .secondary
+        let color: Color = check?.level == .passed ? .primary : check?.level == .failed ? .orange : .secondary
         return HStack(spacing: 12) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 20)
-            Text(title).font(.callout).foregroundStyle(.secondary)
+            Text(title).routekeeperFont(.callout).foregroundStyle(.secondary)
             Spacer()
             Text(check?.detail ?? L("target.notChecked"))
-                .font(.system(.callout, design: .monospaced)).foregroundStyle(color)
-                .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                .routekeeperFont(.callout, design: .monospaced).foregroundStyle(color)
+                .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
         }
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    var protectionPage: some View {
-        switch protectionSection {
-        case .authentication:
-            AuthenticationPage(
-                controller: store.authentication,
-                launchAction: { store.launchFromAuthentication() }
-            )
-        case .networkSettings:
-            NetworkProtectionPage(store: store)
-        }
-    }
-
-    @ViewBuilder
-    var settingsPage: some View {
-        switch settingsSection {
-        case .general:
-            VStack(spacing: 16) {
-                appSettingsPage
-                navigationToolCard(
-                    title: L("page.events"),
-                    subtitle: text("\(store.events.count) 条本机记录", "\(store.events.count) local events"),
-                    symbol: "clock.arrow.circlepath",
-                    identifier: "tool-card-events"
-                ) {
-                    settingsSection = .events
-                }
-                navigationToolCard(
-                    title: L("page.cleanup"),
-                    subtitle: text("清理缓存与日志，或重置 Routekeeper 本地信息",
-                                   "Clean caches and logs, or reset Routekeeper local data"),
-                    symbol: "trash.circle",
-                    identifier: "tool-card-cleanup"
-                ) {
-                    settingsSection = .cleanup
-                }
-                navigationToolCard(
-                    title: text("关于", "About"),
-                    subtitle: text("版本、用途边界与免责声明", "Version, purpose and disclaimer"),
-                    symbol: "info.circle",
-                    identifier: "tool-card-about"
-                ) {
-                    settingsSection = .about
-                }
-            }
-        case .events:
-            eventsPage
-        case .cleanup:
-            cleanupPage
-        case .about:
-            AboutPage(onQuit: { confirmQuit(store) })
-        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(check?.detail ?? L("target.notChecked"))")
     }
 
     private func homeGatewayTitle(
@@ -1047,45 +999,6 @@ struct Dashboard: View {
         }
     }
 
-    func navigationToolCard(
-        title: String,
-        subtitle: String,
-        symbol: String,
-        identifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: symbol)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 38, height: 38)
-                    .background(
-                        Color.primary.opacity(0.045),
-                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 15, weight: .semibold))
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(text("打开", "Open"))
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(appAccent)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .cardSurface(corner: 18)
-        .accessibilityIdentifier(identifier)
-        .accessibilityLabel("\(title)，\(subtitle)")
-    }
-
     var eventsPage: some View {
         GuardCard(title: L("card.events"), subtitle: L("events.sub")) {
             if store.events.isEmpty {
@@ -1093,15 +1006,15 @@ struct Dashboard: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(store.events) { event in
-                        HStack(alignment: .top, spacing: 14) {
+                        HStack(alignment: .firstTextBaseline, spacing: 14) {
                             Text(event.time.formatted(date: .omitted, time: .standard))
-                                .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                                .frame(width: 70, alignment: .leading)
+                                .routekeeperFont(.caption, design: .monospaced).foregroundStyle(.secondary)
+                            .frame(width: 70 * textScale, alignment: .leading)
                             if event.isAttention {
                                 Label(text("需注意", "Attention"), systemImage: "exclamationmark.triangle.fill")
-                                    .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                                    .routekeeperFont(.caption, weight: .semibold).foregroundStyle(.orange)
                             }
-                            Text(event.message).font(.callout).textSelection(.enabled)
+                            Text(event.message).routekeeperFont(.callout).textSelection(.enabled)
                             Spacer(minLength: 0)
                         }.padding(.vertical, 5)
                         if event.id != store.events.last?.id { Divider() }
@@ -1166,21 +1079,22 @@ struct Dashboard: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(cleanupSummaryTitle)
-                        .font(.caption.weight(.semibold))
+                        .routekeeperFont(.caption, weight: .semibold)
                         .foregroundStyle(.secondary)
                     if store.cleanupPlan == nil {
                         Text(store.cleanupBusy
                              ? text("正在统计可清理空间", "Calculating cleanable space")
                              : text("扫描后显示可清理空间", "Cleanable space appears after scanning"))
-                            .font(.callout)
+                            .routekeeperFont(.callout)
                             .foregroundStyle(.secondary)
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(cleanupAvailableSize)
-                                .font(.system(size: 32, weight: .semibold, design: .rounded))
+                                .routekeeperFont(.largeTitle, weight: .semibold)
+                                .fontDesign(.rounded)
                                 .monospacedDigit()
                             Text(text("可清理", "cleanable"))
-                                .font(.title3.weight(.medium))
+                                .routekeeperFont(.title3, weight: .medium)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -1198,7 +1112,7 @@ struct Dashboard: View {
                                 .foregroundStyle(.orange)
                             }
                         }
-                        .font(.caption)
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.secondary)
                     }
                 }
@@ -1216,7 +1130,7 @@ struct Dashboard: View {
                             store.refreshCleanup()
                         }
                         .buttonStyle(.borderless)
-                        .font(.callout)
+                        .routekeeperFont(.callout)
                         .disabled(store.cleanupBusy)
                     }
                     Button {
@@ -1244,20 +1158,20 @@ struct Dashboard: View {
                         store.selectAllCleanupTargets()
                     }
                     .buttonStyle(.borderless)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     Button(text("清除", "Clear")) {
                         store.cleanupSelection.removeAll()
                         store.cleanupIncludesLocalData = false
                     }
                     .buttonStyle(.borderless)
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     Spacer()
                 }
             }
 
             if !store.cleanupResult.isEmpty {
                 Label(store.cleanupResult, systemImage: "checkmark.circle")
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1288,7 +1202,7 @@ struct Dashboard: View {
                     systemImage: "checkmark.seal"
                 )
             }
-            .font(.callout)
+            .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -1302,7 +1216,7 @@ struct Dashboard: View {
             ),
             systemImage: "checkmark.shield"
         )
-        .font(.caption)
+        .routekeeperFont(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 4)
@@ -1333,7 +1247,7 @@ struct Dashboard: View {
                         ),
                         systemImage: "info.circle"
                     )
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -1359,12 +1273,12 @@ struct Dashboard: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(text("清除设置、记录、凭证与沙箱副本",
                               "Clear settings, history, credentials and sandbox copies"))
-                        .font(.callout.weight(.medium))
+                        .routekeeperFont(.callout, weight: .medium)
                     Text(text(
                         "不可恢复，也不会进入废纸篓。",
                         "This cannot be undone or restored from Trash."
                     ))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1406,14 +1320,14 @@ struct Dashboard: View {
                         isOn: cleanupGroupSelectionBinding(targets)
                     )
                     .toggleStyle(.checkbox)
-                    .font(.caption.weight(.medium))
+                    .routekeeperFont(.caption, weight: .medium)
                     .disabled(selectable.isEmpty)
                     Spacer()
                     Text(text(
                         "\(selectedCount)/\(selectable.count) 项已选",
                         "\(selectedCount)/\(selectable.count) selected"
                     ))
-                    .font(.caption2)
+                    .routekeeperFont(.caption2)
                     .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 7)
@@ -1436,12 +1350,12 @@ struct Dashboard: View {
                     )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cleanupScopeTitle(scope))
-                        .font(.callout.weight(.semibold))
+                        .routekeeperFont(.callout, weight: .semibold)
                     Text(text(
                         "\(selectable.count) 项可清理",
                         "\(selectable.count) cleanable"
                     ))
-                    .font(.caption2)
+                    .routekeeperFont(.caption2)
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1450,14 +1364,14 @@ struct Dashboard: View {
                         "共 \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))",
                         "\(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)) total"
                     ))
-                    .font(.caption.monospacedDigit())
+                    .routekeeperFont(.caption, monospacedDigit: true)
                     Text(selectedBytes > 0
                          ? text(
                             "已选 \(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file))",
                             "\(ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file)) selected"
                          )
                          : text("未选择", "Nothing selected"))
-                        .font(.caption2.monospacedDigit())
+                        .routekeeperFont(.caption2, monospacedDigit: true)
                         .foregroundStyle(selectedBytes > 0 ? appAccent : Color.secondary)
                 }
             }
@@ -1626,12 +1540,12 @@ struct Dashboard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(target.label(english: L10n.resolvedEnglish))
-                    .font(.callout.weight(.medium))
+                    .routekeeperFont(.callout, weight: .medium)
                 Text(target.kind(english: L10n.resolvedEnglish))
-                    .font(.caption)
+                    .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                 Text(abbreviateHome(target.path))
-                    .font(.system(.caption2, design: .monospaced))
+                    .routekeeperFont(.caption2, design: .monospaced)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
                     .lineLimit(1)
@@ -1639,7 +1553,7 @@ struct Dashboard: View {
                     .help(target.path)
                 if let reason = target.blockedReason {
                     Label(cleanupBlockedReason(reason), systemImage: "lock.fill")
-                        .font(.caption.weight(.medium))
+                        .routekeeperFont(.caption, weight: .medium)
                         .foregroundStyle(.orange)
                 }
             }
@@ -1647,20 +1561,20 @@ struct Dashboard: View {
 
             VStack(alignment: .trailing, spacing: 4) {
                 Text(ByteCountFormatter.string(fromByteCount: target.sizeBytes, countStyle: .file))
-                    .font(.callout.monospacedDigit())
+                    .routekeeperFont(.callout, monospacedDigit: true)
                 Text(target.blockedReason == nil
                      ? (store.cleanupSelection.contains(target.id)
                         ? text("已选择", "Selected")
                         : text("可清理", "Cleanable"))
                      : text("受保护", "Protected"))
-                    .font(.caption2.weight(.medium))
+                    .routekeeperFont(.caption2, weight: .medium)
                     .foregroundStyle(
                         target.blockedReason != nil
                             ? Color.orange
                             : store.cleanupSelection.contains(target.id) ? appAccent : Color.secondary
                     )
             }
-            .frame(width: 96, alignment: .trailing)
+            .frame(width: 96 * textScale, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
@@ -1682,214 +1596,9 @@ struct Dashboard: View {
         }
     }
 
-    var appSettingsPage: some View {
-        GuardCard(title: L("card.general"), subtitle: L("card.general.sub")) {
-            Picker(L("general.language"), selection: Binding(
-                get: { L10n.language },
-                set: { newValue in
-                    L10n.language = newValue
-                    UserDefaults.standard.set([newValue == .en ? "en" : "zh-Hans"], forKey: "AppleLanguages")
-                    store.languageRevision += 1
-                    store.notifyLanguageChanged()
-                }
-            )) {
-                ForEach(AppLanguage.allCases, id: \.self) { lang in Text(lang.title).tag(lang) }
-            }.pickerStyle(.menu).frame(maxWidth: 260)
-            Text(L("general.langNote")).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Picker(L("general.appearance"), selection: $appearanceRaw) {
-                ForEach(AppAppearance.allCases, id: \.self) { mode in
-                    Text(mode.title).tag(mode.rawValue)
-                }
-            }.pickerStyle(.menu).frame(maxWidth: 260)
-            Divider().padding(.vertical, 4)
-            if store.settings.experimentalSandboxEnabled {
-                Label(
-                    text("沙箱运行中，无法进行设置。请先结束并关闭沙箱。",
-                         "Sandbox is active. End and close it before changing settings."),
-                    systemImage: "lock.shield"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            } else {
-                Toggle(text("自动出口体检", "Automatic egress checks"),
-                       isOn: $store.automaticEgressAuditEnabled)
-                    .toggleStyle(.switch)
-                Picker(text("自动体检间隔", "Automatic-check interval"),
-                       selection: $store.automaticEgressAuditIntervalMinutes) {
-                    Text(text("每 15 分钟", "Every 15 minutes")).tag(15)
-                    Text(text("每 30 分钟", "Every 30 minutes")).tag(30)
-                    Text(text("每 60 分钟", "Every 60 minutes")).tag(60)
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 260)
-                .disabled(!store.automaticEgressAuditEnabled)
-            }
-        }
-    }
-
     func abbreviateHome(_ path: String) -> String {
         let home = NSHomeDirectory()
         return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
-    }
-}
-
-private struct AppBadge: View {
-    let collapsed: Bool
-    let symbol: String
-    let tint: Color
-
-    @ViewBuilder
-    var body: some View {
-        Image(systemName: symbol).font(.system(size: 18, weight: .light))
-            .foregroundStyle(tint)
-            .frame(width: 34, height: 34)
-            .background {
-                if #available(macOS 26.0, *) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.clear)
-                        .glassEffect(
-                            .regular.tint(tint.opacity(0.10)),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        )
-                } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(tint.opacity(0.09))
-                }
-            }
-            .frame(maxWidth: .infinity)
-    }
-}
-
-private struct SidebarButton: View {
-    let page: GuardPage
-    let selected: Bool
-    let collapsed: Bool
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: page.symbol).font(.system(size: 13, weight: .medium))
-                    .frame(width: 20)
-                if !collapsed {
-                    Text(page.title).font(.callout.weight(selected ? .semibold : .regular))
-                    Spacer(minLength: 0)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
-            .padding(.horizontal, collapsed ? 0 : 10)
-            .frame(height: 34)
-            .routekeeperSidebarSelection(selected: selected)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(selected ? appAccent : Color.primary)
-        .accessibilityIdentifier("nav-\(page.rawValue)")
-        .help(page.title)
-        .accessibilityLabel(page.title)
-    }
-}
-
-private struct SidebarSubButton: View {
-    let title: String
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-            .routekeeperSidebarSelection(selected: selected, cornerRadius: 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(selected ? appAccent : Color.primary.opacity(0.78))
-        .accessibilityLabel(title)
-    }
-}
-
-private struct SidebarToggleButton: View {
-    let collapsed: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            toggleLabel
-        }
-        .buttonStyle(HeaderIconButtonStyle(hovering: hovering))
-        .onHover { hovering = $0 }
-        .help(collapsed
-              ? (L10n.resolvedEnglish ? "Show sidebar" : "显示侧栏")
-              : (L10n.resolvedEnglish ? "Hide sidebar" : "隐藏侧栏"))
-        .accessibilityLabel(collapsed
-                            ? (L10n.resolvedEnglish ? "Show sidebar" : "显示侧栏")
-                            : (L10n.resolvedEnglish ? "Hide sidebar" : "隐藏侧栏"))
-        .accessibilityIdentifier("sidebar-toggle")
-    }
-
-    private var toggleLabel: some View {
-        Image(systemName: "sidebar.left")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(hovering ? Color.primary : Color.secondary)
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
-    }
-}
-
-private struct PageHeaderBreadcrumb: View {
-    let pageTitle: String
-    let sectionTitle: String?
-    let onOpenRoot: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            if let sectionTitle {
-                Button(action: onOpenRoot) {
-                    Text(pageTitle)
-                        .foregroundStyle(Color.secondary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(L10n.resolvedEnglish ? "Back to \(pageTitle)" : "返回\(pageTitle)")
-                .accessibilityLabel(L10n.resolvedEnglish ? "Back to \(pageTitle)" : "返回\(pageTitle)")
-                .accessibilityIdentifier("page-header-root")
-                Text("/")
-                    .foregroundStyle(.tertiary)
-                Text(sectionTitle)
-                    .foregroundStyle(.primary)
-            } else {
-                Text(pageTitle)
-            }
-        }
-    }
-}
-
-private struct HeaderIconButtonStyle: ButtonStyle {
-    let hovering: Bool
-
-    @ViewBuilder
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-        configuration.label
-            .background {
-                if hovering || configuration.isPressed {
-                    if #available(macOS 26.0, *) {
-                        shape
-                            .fill(.clear)
-                            .glassEffect(.regular.interactive(), in: shape)
-                    } else {
-                        shape.fill(Color.primary.opacity(0.06))
-                    }
-                }
-            }
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -1943,10 +1652,15 @@ struct GlassCircleButton: View {
 }
 
 struct GlassButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.7),
+                value: configuration.isPressed
+            )
     }
 }
 
@@ -1966,53 +1680,73 @@ struct GuardCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 15.5, weight: .semibold)).tracking(-0.15)
+                Text(title)
+                    .routekeeperFont(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 if !subtitle.isEmpty {
-                    Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                    Text(subtitle)
+                        .routekeeperFont(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }.padding(.bottom, 3)
+            }
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .cardSurface(corner: 18)
+        .padding(18)
+        .appSurface(.primary)
+        .accessibilityElement(children: .contain)
     }
 }
 
 struct CheckRow: View {
     let row: CheckItem
-    var color: Color { row.level == .passed ? appAccent : row.level == .warning ? .secondary : .orange }
-    var symbol: String { row.level == .passed ? "checkmark.circle.fill" : row.level == .warning ? "info.circle" : row.level == .unknown ? "questionmark.circle.fill" : "exclamationmark.circle.fill" }
+    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
+    var color: Color { row.level == .passed ? .secondary : row.level == .warning ? .secondary : .orange }
+    var symbol: String { row.level == .passed ? "checkmark.circle" : row.level == .warning ? "info.circle" : row.level == .unknown ? "questionmark.circle.fill" : "exclamationmark.circle.fill" }
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol).foregroundStyle(color).frame(width: 18).padding(.top, 2)
-            Text(row.title).font(.callout.weight(.medium)).frame(width: 120, alignment: .leading)
-            Text(row.detail).font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+            Text(row.title)
+                .routekeeperFont(.callout, weight: .medium)
+                .frame(width: 120 * textScale, alignment: .leading)
+            Text(row.detail).routekeeperFont(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
         }.padding(.vertical, 3)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(row.title)，\(row.level == .passed ? "通过" : row.level == .warning ? "提示" : row.level == .unknown ? "未知" : "未通过")，\(row.detail)")
+            .accessibilityLabel(
+                "\(row.title), \(L10n.resolvedEnglish ? checkLevelEnglish(row.level) : checkLevelChinese(row.level)), \(row.detail)"
+            )
+    }
+
+    private func checkLevelChinese(_ level: CheckLevel) -> String {
+        switch level {
+        case .passed: return "通过"
+        case .warning: return "提示"
+        case .unknown: return "未知"
+        case .failed: return "未通过"
+        }
+    }
+
+    private func checkLevelEnglish(_ level: CheckLevel) -> String {
+        switch level {
+        case .passed: return "passed"
+        case .warning: return "warning"
+        case .unknown: return "unknown"
+        case .failed: return "failed"
+        }
+    }
+
+    private var textScale: CGFloat {
+        (AppTextScale(rawValue: textScaleRaw) ?? .standard).multiplier
     }
 }
 
 private struct CardBackground: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
     var corner: CGFloat
     func body(content: Content) -> some View {
-        content
-            .background(
-                Color(nsColor: .textBackgroundColor),
-                in: RoundedRectangle(cornerRadius: corner, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
-            )
-            .shadow(
-                color: colorScheme == .light ? .black.opacity(0.045) : .clear,
-                radius: 14, x: 0, y: 6
-            )
+        content.appSurface(.primary, corner: min(corner, 14))
     }
 }
 
@@ -2020,82 +1754,42 @@ extension View {
     func cardSurface(corner: CGFloat = 16) -> some View { modifier(CardBackground(corner: corner)) }
 }
 
-private struct ScrollOffsetObserver: NSViewRepresentable {
-    let onChange: (CGFloat) -> Void
-
-    func makeNSView(context: Context) -> ScrollObserverView {
-        let view = ScrollObserverView()
-        view.onOffsetChange = onChange
-        return view
+private struct SidebarTableAppearance: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        SidebarTableAppearanceView()
     }
 
-    func updateNSView(_ view: ScrollObserverView, context: Context) {
-        view.onOffsetChange = onChange
-        view.attachIfNeeded()
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? SidebarTableAppearanceView)?.configureTable()
     }
 }
 
-private final class ScrollObserverView: NSView {
-    var onOffsetChange: ((CGFloat) -> Void)?
-    private weak var observedClipView: NSClipView?
-    private var boundsObserver: NSObjectProtocol?
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        attachIfNeeded()
-    }
-
+private final class SidebarTableAppearanceView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        attachIfNeeded()
+        configureTable()
     }
 
-    func attachIfNeeded() {
-        guard let scrollView = enclosingScrollView else {
-            DispatchQueue.main.async { [weak self] in self?.attachIfNeeded() }
-            return
-        }
-
-        let clipView = scrollView.contentView
-        guard observedClipView !== clipView else {
-            reportOffset()
-            return
-        }
-
-        if let boundsObserver {
-            NotificationCenter.default.removeObserver(boundsObserver)
-        }
-        observedClipView = clipView
-        clipView.postsBoundsChangedNotifications = true
-        boundsObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: clipView,
-            queue: .main
-        ) { [weak self] _ in
-            self?.reportOffset()
-        }
-        reportOffset()
-    }
-
-    private func reportOffset() {
-        guard let clipView = observedClipView else { return }
-        onOffsetChange?(max(0, clipView.bounds.minY))
-    }
-
-    deinit {
-        if let boundsObserver {
-            NotificationCenter.default.removeObserver(boundsObserver)
+    func configureTable() {
+        guard let window else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let table = self.sidebarTable(in: window) else { return }
+            table.identifier = NSUserInterfaceItemIdentifier("routekeeper-sidebar-list")
+            table.selectionHighlightStyle = .none
         }
     }
-}
 
-private struct WindowDragHelper: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        Task { @MainActor in view.window?.isMovableByWindowBackground = true }
-        return view
+    private func sidebarTable(in window: NSWindow) -> NSTableView? {
+        guard let contentView = window.contentView else { return nil }
+        let identifier = NSUserInterfaceItemIdentifier("routekeeper-sidebar-list")
+        return descendantTables(in: contentView)
+            .first(where: { $0.identifier == identifier })
+            ?? descendantTables(in: contentView).first
     }
-    func updateNSView(_ view: NSView, context: Context) {
-        view.window?.isMovableByWindowBackground = true
+
+    private func descendantTables(in view: NSView) -> [NSTableView] {
+        view.subviews.flatMap { subview in
+            (subview as? NSTableView).map { [$0] } ?? descendantTables(in: subview)
+        }
     }
 }

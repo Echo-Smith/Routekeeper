@@ -570,8 +570,8 @@ final class GuardStore {
         }
         guard let token = authentication.launchToken() else {
             sandbox.message = L10n.resolvedEnglish
-                ? "Save a Claude Code sign-in token in Keychain before launching the isolated session."
-                : "请先在“Claude Code 登录凭证”中保存登录凭证，再启动隔离会话。"
+                ? "Save a Claude Code sign-in token under Tools → Sign-in before launching the isolated session."
+                : "请先在“工具 → 登录凭证”中保存登录凭证，再启动隔离会话。"
             return
         }
         sandbox.launchClaudeCode(token: token)

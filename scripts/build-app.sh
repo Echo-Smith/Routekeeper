@@ -11,6 +11,12 @@ rm -rf "$APP/Contents/Library/SystemExtensions/local.routekeeper.macos.filter.sy
 rm -f "$APP/Contents/embedded.provisionprofile"
 rm -f "$APP/Contents/Resources/AppIcon.icns"
 cp "$BIN_DIR/Routekeeper" "$APP/Contents/MacOS/Routekeeper"
+# SwiftPM currently records the deployment target in LC_BUILD_VERSION's SDK
+# field. Correct it so AppKit can opt into the SDK's current window appearance.
+xcrun vtool -set-build-version macos 14.0 "$(xcrun --sdk macosx --show-sdk-version)" \
+    -replace -output "$APP/Contents/MacOS/Routekeeper.sdk" \
+    "$APP/Contents/MacOS/Routekeeper"
+mv "$APP/Contents/MacOS/Routekeeper.sdk" "$APP/Contents/MacOS/Routekeeper"
 swift scripts/make-icon.swift "$BUILD_ROOT/Guard.iconset"
 iconutil -c icns "$BUILD_ROOT/Guard.iconset" -o "$APP/Contents/Resources/AppIcon-Glass.icns"
 cat > "$APP/Contents/Info.plist" <<'PLIST'

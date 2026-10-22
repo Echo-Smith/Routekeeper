@@ -127,7 +127,7 @@ bash scripts/build-dmg.sh
 `build-app.sh` 会生成 ad-hoc 签名的 `dist/Routekeeper.app`，`build-dmg.sh`
 会生成可拖入“应用程序”文件夹的 DMG。构建产物和签名配置不会提交到 Git。
 
-当前共 145 项测试，覆盖路由证据、IPv6、DNS/UDP 探测、报告脱敏、监控状态、
+当前共 148 项测试，覆盖路由证据、IPv6、DNS/UDP 探测、报告脱敏、监控状态、
 进程范围、抓包输入校验、界面行为、本地中继协议、Seatbelt 文件与网络边界、
 系统代理配置对齐、localhost 监听拦截、子进程继承、沙箱状态处理，以及代理
 网关证据的过期和启动门禁。测试还覆盖 Claude Science 官方包发现、daemon

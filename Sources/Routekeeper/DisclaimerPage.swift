@@ -17,10 +17,11 @@ struct DisclaimerConsentSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 7) {
                 Label(text("免责声明", "Disclaimer"), systemImage: "doc.text")
-                    .font(.system(size: 22, weight: .semibold))
+                    .routekeeperFont(.title2, weight: .semibold)
+                    .accessibilityAddTraits(.isHeader)
                 Text(text("请阅读并同意以下条款后继续使用。",
                           "Read and accept these terms before continuing."))
-                    .font(.callout)
+                    .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -149,7 +150,8 @@ struct DisclaimerBody: View {
             ForEach(sections) { section in
                 VStack(alignment: .leading, spacing: 7) {
                     Text(section.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .routekeeperFont(.headline)
+                        .accessibilityAddTraits(.isHeader)
                     JustifiedText(section.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -168,7 +170,8 @@ struct DisclaimerScopeNotice: View {
                 L10n.resolvedEnglish ? "Purpose and limits" : "用途与边界",
                 systemImage: "person.badge.shield.checkmark"
             )
-            .font(.system(size: 15, weight: .semibold))
+            .routekeeperFont(.headline)
+            .accessibilityAddTraits(.isHeader)
             JustifiedText(
                 L10n.resolvedEnglish
                     ? "Routekeeper helps users manage a Claude identity they lawfully hold, verify this Mac’s network egress, and inspect the Claude client environment. It must not be used to violate Anthropic’s Terms of Service or applicable law. Local settings do not change Anthropic’s server-side records and do not guarantee anonymity, account availability, or server-side regional status."
