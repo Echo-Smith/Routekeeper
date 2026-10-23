@@ -42,11 +42,13 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var statusPopover: NSPopover?
     private var statusRefreshTask: Task<Void, Never>?
-    private var statusPopoverEventMonitors: [Any] = []
+    private var statusPopoverOutsideMonitor: Any?
+    private var displayedStatusSymbol: String?
+    private var statusButtonView: StatusItemButtonView?
     private weak var store: GuardStore?
 
     var isStatusItemConfigured: Bool {
-        statusItem?.button?.image != nil
+        statusButtonView?.image != nil
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -59,10 +61,18 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
 
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            item.button?.imagePosition = .imageOnly
-            item.button?.target = self
-            item.button?.action = #selector(toggleStatusPopover)
             item.button?.toolTip = "Routekeeper"
+            let buttonView = StatusItemButtonView()
+            buttonView.onPrimaryClick = { [weak self] in
+                self?.handleStatusItemPrimaryClick()
+            }
+            buttonView.onContextClick = { [weak self] in
+                self?.showStatusPopover()
+            }
+            item.button?.addSubview(buttonView)
+            buttonView.frame = item.button?.bounds ?? .zero
+            buttonView.autoresizingMask = [.width, .height]
+            statusButtonView = buttonView
             statusItem = item
         }
 
@@ -70,10 +80,12 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            popover.contentSize = NSSize(width: 300, height: 340)
-            popover.contentViewController = NSHostingController(
-                rootView: GuardMenu(store: store, appDelegate: self)
-            )
+            let controller = NSHostingController(rootView: GuardMenu(store: store, appDelegate: self))
+            if #available(macOS 13.0, *) {
+                controller.sizingOptions = [.preferredContentSize]
+            }
+            popover.contentViewController = controller
+            popover.contentSize = controller.preferredContentSize
             statusPopover = popover
         }
 
@@ -91,90 +103,78 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         statusRefreshTask?.cancel()
         statusRefreshTask = nil
-        removeStatusPopoverEventMonitors()
+        removeStatusPopoverOutsideMonitor()
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
         }
+        statusButtonView = nil
         statusItem = nil
         statusPopover = nil
     }
 
-    @objc private func toggleStatusPopover() {
-        guard let button = statusItem?.button, let popover = statusPopover else { return }
+    private func handleStatusItemPrimaryClick() {
+        guard let popover = statusPopover else { return }
         if popover.isShown {
             closeStatusPopover()
-            return
+        } else {
+            showStatusPopover()
         }
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover.contentSize = statusPopoverSize
+    }
+
+    private func showStatusPopover() {
+        guard let button = statusItem?.button, let popover = statusPopover, !popover.isShown else { return }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        DispatchQueue.main.async {
-            popover.contentViewController?.view.window?.makeKey()
-        }
-        installStatusPopoverEventMonitors()
+        installStatusPopoverOutsideMonitor()
     }
 
     func closeStatusPopover() {
         statusPopover?.performClose(nil)
-        removeStatusPopoverEventMonitors()
+        removeStatusPopoverOutsideMonitor()
     }
 
-    private func installStatusPopoverEventMonitors() {
-        removeStatusPopoverEventMonitors()
-        let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
-            guard let self, self.statusPopover?.isShown == true else { return event }
-            if event.type == .keyDown, event.keyCode == 53 {
-                self.closeStatusPopover()
-                return nil
-            }
-            if event.window !== self.statusItem?.button?.window,
-               event.window !== self.statusPopover?.contentViewController?.view.window {
-                self.closeStatusPopover()
-            }
-            return event
-        }
-        let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+    private func installStatusPopoverOutsideMonitor() {
+        removeStatusPopoverOutsideMonitor()
+        statusPopoverOutsideMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
             guard let self, self.statusPopover?.isShown == true else { return }
-            if let button = self.statusItem?.button, let window = button.window {
-                let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
-                if buttonFrame.contains(NSEvent.mouseLocation) { return }
+            let mouseLocation = NSEvent.mouseLocation
+            if let button = self.statusItem?.button,
+               let window = button.window,
+               window.convertToScreen(button.convert(button.bounds, to: nil)).contains(mouseLocation) {
+                return
+            }
+            if let popoverWindow = self.statusPopover?.contentViewController?.view.window,
+               popoverWindow.frame.contains(mouseLocation) {
+                return
             }
             self.closeStatusPopover()
         }
-        if let local { statusPopoverEventMonitors.append(local) }
-        if let global { statusPopoverEventMonitors.append(global) }
     }
 
-    private func removeStatusPopoverEventMonitors() {
-        for monitor in statusPopoverEventMonitors {
-            NSEvent.removeMonitor(monitor)
+    private func removeStatusPopoverOutsideMonitor() {
+        if let statusPopoverOutsideMonitor {
+            NSEvent.removeMonitor(statusPopoverOutsideMonitor)
+            self.statusPopoverOutsideMonitor = nil
         }
-        statusPopoverEventMonitors.removeAll()
-    }
-
-    private var statusPopoverSize: NSSize {
-        guard let contentView = statusPopover?.contentViewController?.view else {
-            return NSSize(width: 300, height: 340)
-        }
-        contentView.layoutSubtreeIfNeeded()
-        return NSSize(width: 300, height: min(620, max(280, contentView.fittingSize.height)))
     }
 
     private func refreshStatusItem() {
-        guard let button = statusItem?.button, let store else { return }
-        let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        let image = NSImage(
-            systemSymbolName: store.symbol,
-            accessibilityDescription: "Routekeeper · \(store.title)"
-        )?.withSymbolConfiguration(configuration)
-        image?.isTemplate = true
-        button.image = image
-        button.toolTip = "Routekeeper · \(store.title)"
-        button.setAccessibilityLabel("Routekeeper")
-        button.setAccessibilityValue(store.title)
-        if statusPopover?.isShown == true {
-            statusPopover?.contentSize = statusPopoverSize
+        guard let button = statusItem?.button, let buttonView = statusButtonView, let store else { return }
+        let title = store.title
+        if displayedStatusSymbol != store.symbol {
+            displayedStatusSymbol = store.symbol
+            let configuration = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            let image = NSImage(
+                systemSymbolName: store.symbol,
+                accessibilityDescription: "Routekeeper · \(title)"
+            )?.withSymbolConfiguration(configuration)
+            image?.isTemplate = true
+            buttonView.image = image
+            button.setAccessibilityLabel("Routekeeper")
         }
+        button.toolTip = "Routekeeper · \(title)"
+        button.setAccessibilityValue(title)
     }
 
     private func refreshDockIcon() {
@@ -226,7 +226,7 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
         let credits = NSAttributedString(
             string: L10n.resolvedEnglish
                 ? "Network inspection, monitoring and Claude environment boundaries.\nLocal checks do not alter server-side records or guarantee anonymity."
-                : "网络检查、监控与 Claude 环境边界辅助工具。\n本机检查不会更改服务端记录，也不保证匿名性。",
+                : "网络体检、监控与 Claude 环境边界辅助工具。\n本机检查不会更改服务端记录，也不保证匿名性。",
             attributes: [
                 .font: NSFont.preferredFont(forTextStyle: .callout),
                 .foregroundColor: NSColor.secondaryLabelColor
@@ -353,6 +353,8 @@ enum Entry {
 struct GuardApp: App {
     @NSApplicationDelegateAdaptor(RoutekeeperAppDelegate.self) private var appDelegate
     @State private var store = GuardStore()
+    @Environment(\.openWindow) private var openWindow
+
     var body: some Scene {
         Window("Routekeeper", id: "main") {
             Dashboard(store: store)
@@ -381,8 +383,27 @@ struct GuardApp: App {
             CommandGroup(replacing: .appTermination) {
                 Button(L("menu.quit")) { confirmQuit(store) }.keyboardShortcut("q")
             }
+            CommandGroup(replacing: .help) {
+                Button(L10n.resolvedEnglish ? "Routekeeper Help" : "Routekeeper 帮助") {
+                    RoutekeeperHelpNavigation.request(.quickStart)
+                    openWindow(id: "routekeeper-help")
+                }
+                .keyboardShortcut("?", modifiers: .command)
+                Button(L10n.resolvedEnglish ? "Experimental Sandbox Help" : "实验性沙箱帮助") {
+                    RoutekeeperHelpNavigation.request(.sandboxOverview)
+                    openWindow(id: "routekeeper-help")
+                }
+            }
             SidebarCommands()
         }
+
+        Window(L10n.resolvedEnglish ? "Routekeeper Help" : "Routekeeper 帮助", id: "routekeeper-help") {
+            RoutekeeperHelpView()
+        }
+        .windowStyle(.automatic)
+        .windowToolbarStyle(.unified)
+        .defaultSize(width: 900, height: 650)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -413,6 +434,7 @@ struct GuardMenu: View {
     let appDelegate: RoutekeeperAppDelegate
     @FocusState private var primaryActionFocused: Bool
     @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
+    @State private var isQuitHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -428,18 +450,11 @@ struct GuardMenu: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             AppHairline()
-            secondaryActions
-            AppHairline()
-            Button {
-                confirmQuit(store)
-            } label: {
-                menuActionLabel(L("menu.quitShort"), systemImage: "power")
-            }
-            .buttonStyle(.borderless)
-            .accessibilityIdentifier("status-popover-quit")
+            bottomActions
         }
         .padding(14)
         .frame(width: 300, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .defaultFocus($primaryActionFocused, true)
         .onExitCommand {
             appDelegate.closeStatusPopover()
@@ -506,7 +521,7 @@ struct GuardMenu: View {
             Label(
                 store.settings.experimentalSandboxEnabled
                     ? (L10n.resolvedEnglish ? "Open sandbox" : "打开沙箱")
-                    : (L10n.resolvedEnglish ? "Open network check" : "打开网络体检"),
+                    : (L10n.resolvedEnglish ? "Open network protection" : "打开网络保护"),
                 systemImage: store.settings.experimentalSandboxEnabled ? "lock.shield" : "rectangle.inset.filled"
             )
             .frame(maxWidth: .infinity)
@@ -556,91 +571,94 @@ struct GuardMenu: View {
     private var secondaryActions: some View {
         VStack(spacing: 2) {
             if store.settings.experimentalSandboxEnabled {
-                if store.sandbox.externalActions.pendingCount > 0 {
-                    Button {
+                if store.sandbox.externalActionsPendingCount > 0 {
+                    StatusMenuActionButton(
+                        title: L10n.resolvedEnglish
+                            ? "Review \(store.sandbox.externalActionsPendingCount) handoff request(s)"
+                            : "审核 \(store.sandbox.externalActionsPendingCount) 个外部操作",
+                        systemImage: "person.badge.key"
+                    ) {
                         appDelegate.showSandboxPanel()
-                    } label: {
-                        menuActionLabel(
-                            L10n.resolvedEnglish
-                                ? "Review \(store.sandbox.externalActions.pendingCount) handoff request(s)"
-                                : "审核 \(store.sandbox.externalActions.pendingCount) 个外部操作",
-                            systemImage: "person.badge.key"
-                        )
                     }
-                    .buttonStyle(.borderless)
                     .accessibilityIdentifier("status-popover-review")
                 }
 
                 if store.sandbox.phase == .running {
-                    Button {
+                    StatusMenuActionButton(
+                        title: L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络",
+                        systemImage: "wifi.slash"
+                    ) {
                         store.pauseSandboxNetwork()
-                    } label: {
-                        menuActionLabel(
-                            L10n.resolvedEnglish ? "Turn sandbox network off" : "关闭沙箱网络",
-                            systemImage: "wifi.slash"
-                        )
                     }
-                    .buttonStyle(.borderless)
                     .accessibilityIdentifier("status-popover-network")
                 } else if store.sandbox.phase == .networkPaused {
-                    Button {
+                    StatusMenuActionButton(
+                        title: L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络",
+                        systemImage: "wifi"
+                    ) {
                         Task { await store.resumeSandboxNetwork() }
-                    } label: {
-                        menuActionLabel(
-                            L10n.resolvedEnglish ? "Turn sandbox network on" : "恢复沙箱网络",
-                            systemImage: "wifi"
-                        )
                     }
-                    .buttonStyle(.borderless)
                     .accessibilityIdentifier("status-popover-network")
                 }
 
                 if store.sandbox.phase.isActive {
-                    Button {
+                    StatusMenuActionButton(
+                        title: L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话",
+                        systemImage: "stop.circle"
+                    ) {
                         Task { await store.endSandboxSession() }
-                    } label: {
-                        menuActionLabel(
-                            L10n.resolvedEnglish ? "End sandbox session" : "结束沙箱会话",
-                            systemImage: "stop.circle"
-                        )
                     }
-                    .buttonStyle(.borderless)
                     .accessibilityIdentifier("status-popover-end-sandbox")
                 }
             } else if store.monitoring {
-                Button {
+                StatusMenuActionButton(
+                    title: L("menu.stopMonitor"),
+                    systemImage: "pause.circle"
+                ) {
                     store.stop()
-                } label: {
-                    menuActionLabel(L("menu.stopMonitor"), systemImage: "pause.circle")
                 }
-                .buttonStyle(.borderless)
                 .accessibilityIdentifier("status-popover-stop-monitor")
             } else {
-                Button {
+                StatusMenuActionButton(
+                    title: L("menu.runCheck"),
+                    systemImage: "arrow.clockwise",
+                    isEnabled: !store.checking
+                ) {
                     Task { await store.check() }
-                } label: {
-                    menuActionLabel(L("menu.runCheck"), systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.borderless)
-                .disabled(store.checking)
                 .accessibilityIdentifier("status-popover-run-check")
             }
         }
     }
 
-    private func menuActionLabel(_ title: String, systemImage: String) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-            Text(title)
-                .routekeeperFont(.callout)
-            Spacer(minLength: 0)
+    private var bottomActions: some View {
+        HStack(spacing: 8) {
+            secondaryActions
+            Spacer(minLength: 8)
+            Rectangle()
+                .fill(Color.primary.opacity(0.12))
+                .frame(width: 1, height: 20)
+            Button {
+                confirmQuit(store)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onHover { isQuitHovered = $0 }
+            .background(
+                isQuitHovered ? Color.primary.opacity(0.08) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .help(L("menu.quitShort"))
+            .accessibilityLabel(L("menu.quitShort"))
+            .accessibilityIdentifier("status-popover-quit")
         }
-        .contentShape(Rectangle())
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
+        .padding(.top, 4)
     }
 
     private var statusColor: Color {
@@ -710,12 +728,12 @@ struct GuardMenu: View {
             ),
             .init(
                 label: L10n.resolvedEnglish ? "Approval" : "待授权",
-                value: session.externalActions.pendingCount == 0
+                value: store.sandbox.externalActionsPendingCount == 0
                     ? (L10n.resolvedEnglish ? "None" : "无")
                     : (L10n.resolvedEnglish
-                        ? "\(session.externalActions.pendingCount) pending"
-                        : "\(session.externalActions.pendingCount) 项待确认"),
-                isAttention: session.externalActions.pendingCount > 0
+                        ? "\(store.sandbox.externalActionsPendingCount) pending"
+                        : "\(store.sandbox.externalActionsPendingCount) 项待确认"),
+                isAttention: store.sandbox.externalActionsPendingCount > 0
             ),
             .init(
                 label: L10n.resolvedEnglish ? "Checks" : "检查",
@@ -794,6 +812,96 @@ private struct MenuSummaryRow {
     var isAttention = false
 }
 
+private struct StatusMenuActionButton: View {
+    let title: String
+    let systemImage: String
+    var isEnabled = true
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(title)
+                    .routekeeperFont(.callout)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .onHover { hovering in
+            isHovered = hovering && isEnabled
+        }
+        .background(
+            isHovered ? Color.primary.opacity(0.08) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
+    }
+}
+
+@MainActor
+private final class StatusItemButtonView: NSView {
+    var onPrimaryClick: (() -> Void)?
+    var onContextClick: (() -> Void)?
+    var image: NSImage? {
+        didSet {
+            imageView.image = image
+            needsDisplay = true
+        }
+    }
+
+    private let imageView = NSImageView()
+    private var isPressed = false {
+        didSet {
+            imageView.alphaValue = isPressed ? 0.55 : 1
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.contentTintColor = .labelColor
+        addSubview(imageView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        imageView.frame = bounds.insetBy(dx: 3, dy: 3)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+        onPrimaryClick?()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isPressed = false
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onContextClick?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isPressed = false
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+}
+
 private struct WindowCommandBridge: NSViewRepresentable {
     @Environment(\.openWindow) private var openWindow
     let delegate: RoutekeeperAppDelegate
@@ -815,9 +923,59 @@ private struct WindowCommandBridge: NSViewRepresentable {
 
 private final class WindowProbeView: NSView {
     var onWindowChange: ((NSWindow?) -> Void)?
+    private var fullScreenObservers: [NSObjectProtocol] = []
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        observeFullScreenChanges()
+        updateTitlebarSeparator()
         onWindowChange?(window)
+    }
+
+    override func layout() {
+        super.layout()
+        updateTitlebarSeparator()
+    }
+
+    deinit {
+        removeFullScreenObservers()
+    }
+
+    private func observeFullScreenChanges() {
+        removeFullScreenObservers()
+        guard let window else { return }
+        let center = NotificationCenter.default
+        fullScreenObservers = [
+            center.addObserver(
+                forName: NSWindow.didEnterFullScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateTitlebarSeparator()
+            },
+            center.addObserver(
+                forName: NSWindow.didExitFullScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateTitlebarSeparator()
+            }
+        ]
+    }
+
+    private func removeFullScreenObservers() {
+        let center = NotificationCenter.default
+        fullScreenObservers.forEach(center.removeObserver)
+        fullScreenObservers.removeAll()
+    }
+
+    private func updateTitlebarSeparator() {
+        guard let window else { return }
+        let style: NSTitlebarSeparatorStyle = window.styleMask.contains(.fullScreen)
+            ? .none
+            : .automatic
+        if window.titlebarSeparatorStyle != style {
+            window.titlebarSeparatorStyle = style
+        }
     }
 }

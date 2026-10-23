@@ -9,9 +9,9 @@ enum GuardPage: String, CaseIterable, Identifiable {
         switch self {
         case .home: return L10n.resolvedEnglish ? "Overview" : "概览"
         case .inspection: return L10n.resolvedEnglish ? "Network check" : "网络体检"
-        case .sandbox: return L10n.resolvedEnglish ? "Sandbox" : "沙箱"
+        case .sandbox: return L10n.resolvedEnglish ? "Experimental sandbox" : "实验性沙箱"
         case .networkProtection: return L10n.resolvedEnglish ? "Network protection" : "网络保护"
-        case .authentication: return L10n.resolvedEnglish ? "Claude Code sign-in" : "Claude Code 登录凭证"
+        case .authentication: return L10n.resolvedEnglish ? "Claude sign-in" : "Claude 登录"
         case .activity: return L10n.resolvedEnglish ? "Activity" : "运行记录"
         case .cleanup: return L10n.resolvedEnglish ? "Cleanup" : "清理"
         }
@@ -20,6 +20,18 @@ enum GuardPage: String, CaseIterable, Identifiable {
         switch self {
         case .authentication: return L10n.resolvedEnglish ? "Sign-in" : "登录凭证"
         default: return title
+        }
+    }
+    var sidebarTitle: String {
+        switch self {
+        case .sandbox: return L10n.resolvedEnglish ? "Sandbox" : "沙箱"
+        default: return navigationTitle
+        }
+    }
+    var sidebarBadge: String? {
+        switch self {
+        case .sandbox: return L10n.resolvedEnglish ? "Experimental" : "实验性"
+        default: return nil
         }
     }
     var symbol: String {
@@ -35,7 +47,7 @@ enum GuardPage: String, CaseIterable, Identifiable {
     }
 
     static let primaryNavigation: [GuardPage] = [
-        .home, .inspection, .sandbox, .networkProtection
+        .home, .networkProtection, .sandbox
     ]
 
     static let toolNavigation: [GuardPage] = [
@@ -46,10 +58,12 @@ enum GuardPage: String, CaseIterable, Identifiable {
 struct Dashboard: View {
     @Bindable var store: GuardStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openWindow) private var openWindow
     @State private var page: GuardPage = .home
     @State private var detailPath: [String] = []
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var sandboxSection: SandboxSection = .overview
+    @State private var networkScrollTarget: NetworkProtectionAnchor?
+    @ObservedObject private var pageOverflow = RoutekeeperToolbarCoordinator.shared
     private func text(_ zh: String, _ en: String) -> String { L10n.resolvedEnglish ? en : zh }
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
@@ -60,12 +74,40 @@ struct Dashboard: View {
     var statusColor: Color {
         if store.settings.experimentalSandboxEnabled {
             switch store.sandbox.phase {
-            case .running: return appAccent
-            case .networkPaused, .failed: return .orange
+            case .running: return appStatusSuccess
+            case .networkPaused: return appStatusWarning
+            case .failed: return appStatusFailure
             default: return .secondary
             }
         }
-        return store.policy.phase == .incident ? .orange : store.policy.phase == .armed ? appAccent : .secondary
+        if store.policy.phase == .incident {
+            return appStatusFailure
+        }
+        if store.settings.gatewayProtectionMode != .off {
+            let gatewayStatus = store.gatewayVerification.status(for: store.settings.gatewayProtectionMode)
+            if gatewayStatus == .failed || gatewayStatus == .expired {
+                return appStatusFailure
+            }
+        }
+        if homeSnapshotHasFailure {
+            return appStatusFailure
+        }
+        if let report = store.egressAudit.report {
+            if report.assessment.level == .attention {
+                return appStatusFailure
+            }
+        }
+        if store.settings.gatewayProtectionMode != .off,
+           store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) != .verified {
+            return appStatusWarning
+        }
+        if homeSnapshotHasWarning {
+            return appStatusWarning
+        }
+        if store.snapshot == nil || store.egressAudit.report == nil {
+            return appStatusWarning
+        }
+        return store.monitoring ? appStatusSuccess : appStatusWarning
     }
     private var pageHorizontalPadding: CGFloat { 22 }
     private var textScale: CGFloat {
@@ -78,45 +120,47 @@ struct Dashboard: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 228, max: 300)
         } detail: {
             NavigationStack(path: $detailPath) {
-            ScrollView {
-                pageBody
-                    .padding(.horizontal, pageHorizontalPadding)
-                    .padding(.top, 22)
-                    .padding(.bottom, 26)
-                    .frame(maxWidth: 1040, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-            .routekeeperScrollEdge()
-            .id(navigationIdentity)
-            .navigationDestination(for: String.self) { _ in
-                AppSettingsView(store: store)
-                    .navigationTitle(text("设置", "Settings"))
-                    .navigationSubtitle("")
-            }
-            .navigationTitle(page.navigationTitle)
-            .navigationSubtitle(currentSectionTitle ?? "")
-            .routekeeperScaledNavigationTitle()
-            .toolbar {
-                if #available(macOS 26.0, *) {
-                    ToolbarItem(placement: .navigation) {
-                        Text(page.navigationTitle)
-                            .routekeeperFont(.title3, weight: .semibold)
-                            .tracking(-0.2)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.leading, 8)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        pageBody
+                            .padding(.horizontal, pageHorizontalPadding)
+                            .padding(.top, 22)
+                            .padding(.bottom, 26)
+                            .frame(maxWidth: 1040, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    .sharedBackgroundVisibility(.hidden)
+                    .id(navigationIdentity)
+                    .onChange(of: networkScrollTarget) { _, target in
+                        guard let target else { return }
+                        DispatchQueue.main.async {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                                proxy.scrollTo(target, anchor: .top)
+                            }
+                            if networkScrollTarget == target {
+                                networkScrollTarget = nil
+                            }
+                        }
+                    }
+                    .navigationDestination(for: String.self) { _ in
+                        AppSettingsView(store: store)
+                            .navigationTitle(text("设置", "Settings"))
+                            .navigationSubtitle("")
+                    }
+                    .navigationTitle(page.navigationTitle)
+                    .navigationSubtitle(currentSectionTitle ?? "")
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            if !pageOverflow.entries.isEmpty {
+                                PageOverflowMenu(
+                                    label: pageOverflow.label,
+                                    entries: pageOverflow.entries
+                                )
+                                .frame(width: 44, height: 44)
+                            }
+                        }
+                    }
                 }
-                if page == .sandbox || page == .networkProtection {
-                    if #available(macOS 26.0, *) {
-                        ToolbarSpacer(.flexible)
-                    }
-                    ToolbarItem(placement: .automatic) {
-                        pageStatusPill
-                    }
-                }
             }
-        }
         }
         .navigationSplitViewStyle(.balanced)
         .id(store.languageRevision)
@@ -202,38 +246,68 @@ struct Dashboard: View {
             .tint(.clear)
             .background(SidebarTableAppearance())
 
-            Divider()
-                .padding(.horizontal, 12)
-
             Button {
                 detailPath = ["settings"]
             } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 18, alignment: .center)
-                    Text(text("设置", "Settings"))
-                        .routekeeperFont(.callout)
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.secondary)
+                sidebarRowLabel(
+                    text("设置", "Settings"),
+                    systemImage: "gearshape"
+                )
                 .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(settingsSelected ? Color.primary.opacity(0.10) : Color.clear)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 1)
+                }
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("nav-settings")
             .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+            .padding(.vertical, 6)
         }
     }
 
     private func sidebarPageRow(_ item: GuardPage) -> some View {
+        sidebarRowLabel(
+            item.sidebarTitle,
+            systemImage: item.symbol,
+            badge: item.sidebarBadge
+        )
+            .listRowBackground(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(detailPath.isEmpty && page == item ? Color.primary.opacity(0.10) : Color.clear)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 1)
+            )
+            .tag(item)
+            .accessibilityIdentifier("nav-\(item.rawValue)")
+            .accessibilityLabel(item.title)
+            .help(item.title)
+    }
+
+    private func sidebarRowLabel(
+        _ title: String,
+        systemImage: String,
+        badge: String? = nil
+    ) -> some View {
         Label {
-            Text(item.navigationTitle)
-                .routekeeperFont(.callout)
+            HStack(spacing: 6) {
+                Text(title)
+                    .routekeeperFont(.callout)
+                if let badge {
+                    Text(badge)
+                        .routekeeperFont(.caption2, weight: .medium)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.065), in: Capsule())
+                }
+            }
         } icon: {
-            Image(systemName: item.symbol)
+            Image(systemName: systemImage)
                 .font(.system(size: 13, weight: .semibold))
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(Color(nsColor: .labelColor))
@@ -241,16 +315,10 @@ struct Dashboard: View {
         }
         .foregroundStyle(.primary)
         .tint(Color(nsColor: .labelColor))
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(detailPath.isEmpty && page == item ? Color.primary.opacity(0.10) : Color.clear)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 1)
-        )
-        .tag(item)
-        .accessibilityIdentifier("nav-\(item.rawValue)")
-        .accessibilityLabel(item.title)
-        .help(item.title)
+    }
+
+    private var settingsSelected: Bool {
+        detailPath == ["settings"]
     }
 
     private var sidebarSelection: Binding<GuardPage?> {
@@ -267,74 +335,35 @@ struct Dashboard: View {
         )
     }
 
-    private var pageStatusPill: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 5, height: 5)
-                .accessibilityHidden(true)
-            Text(capsuleText)
-                .routekeeperFont(.caption, weight: .medium)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text("当前状态", "Current status"))
-        .accessibilityValue(capsuleText)
-        .accessibilityIdentifier("page-status")
-    }
-
     private var currentSectionTitle: String? {
         switch page {
-        case .sandbox:
-            return sandboxSection == .overview ? nil : sandboxSection.title
-        case .home, .inspection, .networkProtection, .authentication, .activity, .cleanup: return nil
+        case .home, .inspection, .sandbox, .networkProtection, .authentication, .activity, .cleanup:
+            return nil
         }
     }
 
     private var navigationIdentity: String {
-        switch page {
-        case .sandbox: return "sandbox-\(sandboxSection.rawValue)"
-        case .home, .inspection, .networkProtection, .authentication, .activity, .cleanup: return page.rawValue
-        }
+        page.rawValue
     }
 
     private func selectPage(_ newPage: GuardPage) {
         detailPath.removeAll()
-        if newPage == .sandbox {
-            sandboxSection = .overview
+        let resolvedPage: GuardPage
+        switch newPage {
+        case .inspection, .networkProtection:
+            networkScrollTarget = .status
+            resolvedPage = .networkProtection
+        default:
+            resolvedPage = newPage
         }
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
-            page = newPage
+            page = resolvedPage
         }
     }
 
-    var capsuleText: String {
-        if store.settings.experimentalSandboxEnabled {
-            return store.sandbox.statusTitle
-        }
-        if store.checking { return L("status.checking") }
-        if store.policy.phase == .incident { return L("status.incident") }
-        if store.monitoring { return L("status.armed") }
-        if store.settings.gatewayProtectionMode != .off {
-            switch store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) {
-            case .verified:
-                break
-            case .needsNodeFailureTest: return text("待测节点断开", "Node test pending")
-            case .needsClientExitTest: return text("待测代理退出", "Client test pending")
-            case .needsRecovery: return text("待恢复代理", "Restore proxy")
-            case .failed: return text("代理网关未通过", "Gateway failed")
-            case .expired: return text("网关证据已过期", "Gateway evidence expired")
-            case .unverified: return text("代理网关待检查", "Gateway not checked")
-            }
-        }
-        guard let snapshot = store.snapshot else { return L("capsule.noCheck") }
-        guard let family = snapshot.proxyIP.map(IPFamily.of),
-              let target = store.settings.target(for: family) else { return L("capsule.noTarget") }
-        let match = snapshot.proxyIP == snapshot.tunnelIP && snapshot.proxyIP == target
-        return "\(L("capsule.last")) \(snapshot.checkedAt.formatted(date: .omitted, time: .shortened)) · \(match ? L("capsule.match") : L("capsule.mismatch"))"
+    private func openNetworkProtection(at anchor: NetworkProtectionAnchor) {
+        selectPage(.networkProtection)
+        networkScrollTarget = anchor
     }
 
     @ViewBuilder var pageBody: some View {
@@ -342,27 +371,28 @@ struct Dashboard: View {
         case .home: homePage
         case .inspection:
             if store.settings.experimentalSandboxEnabled {
-                SandboxPage(store: store, mode: .networkCheck)
+                SandboxPage(store: store)
             } else {
-                InspectionPage(
-                    store: store,
-                    audit: store.egressAudit,
-                    onOpenNetworkSettings: {
-                        selectPage(.networkProtection)
-                    }
-                )
+                networkProtectionPage
             }
         case .sandbox:
-            SandboxPage(store: store, mode: .management, section: $sandboxSection)
+            SandboxPage(store: store)
         case .networkProtection:
-            NetworkProtectionPage(store: store)
+            networkProtectionPage
         case .authentication:
             AuthenticationPage(
                 controller: store.authentication,
+                sandbox: store.sandbox,
                 launchAction: { store.launchFromAuthentication() }
             )
         case .activity: eventsPage
         case .cleanup: cleanupPage
+        }
+    }
+
+    private var networkProtectionPage: some View {
+        NetworkProtectionPage(store: store) { anchor in
+            networkScrollTarget = anchor
         }
     }
 
@@ -424,7 +454,7 @@ struct Dashboard: View {
                 Button {
                     selectPage(.sandbox)
                 } label: {
-                    Label(text("打开沙箱", "Open sandbox"), systemImage: "lock.shield")
+                    Label(text("打开实验性沙箱", "Open experimental sandbox"), systemImage: "lock.shield")
                 }
                 .routekeeperProminentButton()
                 .accessibilityIdentifier("home-open-sandbox")
@@ -443,36 +473,20 @@ struct Dashboard: View {
                     .frame(width: 32, height: 32)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(headline)
+                    HStack(spacing: 8) {
+                        Text(homeHealthTitle)
                             .routekeeperFont(.title2, weight: .semibold)
                             .tracking(-0.3)
-                        if showsInlineCheckAction {
-                            Button(action: homePrimaryAction) {
-                                Label(homePrimaryTitle, systemImage: homePrimarySymbol)
-                            }
-                            .routekeeperProminentButton()
-                            .controlSize(.regular)
-                            .disabled(store.checking)
-                            .accessibilityIdentifier("home-inline-check")
-                        }
+                        homeMonitoringStateBadge
                     }
-                    Text(store.notice.isEmpty ? L("overview.unmonitored.sub") : store.notice)
+                    Text(homeHealthSubtitle)
                         .routekeeperFont(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                if let snapshot = store.snapshot {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(homePassedChecks)/\(snapshot.checks.count)")
-                            .routekeeperFont(.title2, weight: .semibold, monospacedDigit: true)
-                            .fontDesign(.rounded)
-                            .monospacedDigit()
-                        Text(homeCheckSummary)
-                            .routekeeperFont(.caption2)
-                            .foregroundStyle(homeAttentionChecks > 0 ? Color.orange : Color.secondary)
-                    }
-                }
+                homePrimaryActionButton
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
             }
 
             VStack(spacing: 0) {
@@ -484,9 +498,9 @@ struct Dashboard: View {
             }
 
             if store.policy.phase == .incident {
-                Button { page = .inspection } label: {
+                Button { selectPage(.inspection) } label: {
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(appStatusFailure)
                             .accessibilityHidden(true)
                         Text(store.policy.reason).routekeeperFont(.callout).foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -494,28 +508,27 @@ struct Dashboard: View {
                             .accessibilityHidden(true)
                     }
                     .padding(12)
-                    .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(appStatusFailure.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.borderless)
             }
 
             AppHairline()
 
-            HStack(spacing: 12) {
-                if let snapshot = store.snapshot {
-                    Text(text("最近体检 \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))",
-                              "Last checked \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))"))
-                        .routekeeperFont(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    homeCompletenessTimeline
+                    homeLastCheckText
+                    Spacer(minLength: 0)
+                    homeCompletenessHelpButton
                 }
-                Spacer()
-                if !showsInlineCheckAction {
-                    Button(action: homePrimaryAction) {
-                        Label(homePrimaryTitle, systemImage: homePrimarySymbol)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        homeCompletenessTimeline
+                        Spacer(minLength: 0)
+                        homeCompletenessHelpButton
                     }
-                    .routekeeperProminentButton()
-                    .controlSize(.large)
-                    .disabled(store.checking)
-                    .accessibilityIdentifier(store.monitoring ? "stop-monitor" : "home-primary")
+                    homeLastCheckText
                 }
             }
         }
@@ -523,24 +536,287 @@ struct Dashboard: View {
         .appSurface(.primary)
     }
 
-    private var homeDetailWorkspace: some View {
-        HStack(alignment: .top, spacing: 16) {
-            homeProtectionSection
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .appSurface(.primary)
+    @ViewBuilder
+    private var homeLastCheckText: some View {
+        if let snapshot = store.snapshot {
+            Text(text("最近体检 \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))",
+                      "Last checked \(snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened))"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
 
-            Group {
-                if store.settings.gatewayProtectionMode != .off {
-                    homeGatewaySection
-                } else {
-                    homeEgressSection
-                }
+    private var homeCompletenessHelpButton: some View {
+        Button {
+            RoutekeeperHelpNavigation.request(.protectionScore)
+            openWindow(id: "routekeeper-help")
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .frame(width: 24, height: 24)
+        .contentShape(Circle())
+        .help(text("了解保护完整度", "About protection completeness"))
+        .accessibilityLabel(text("了解保护完整度", "About protection completeness"))
+    }
+
+    private var homeCompleteness: ProtectionCompletenessAssessment {
+        ProtectionCompleteness.evaluate(
+            snapshot: store.snapshot,
+            egress: store.egressAudit.report,
+            gatewayMode: store.settings.gatewayProtectionMode,
+            gatewayStatus: store.settings.gatewayProtectionMode == .off
+                ? .unverified
+                : store.gatewayVerification.status(for: store.settings.gatewayProtectionMode),
+            hasInvalidatedEvidence: store.evidenceNeedsReview
+        )
+    }
+
+    private var homeCompletenessTimeline: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { _ in
+            homeCompletenessSummary
+        }
+    }
+
+    private var homeCompletenessSummary: some View {
+        let assessment = homeCompleteness
+        return HStack(spacing: 7) {
+            Image(systemName: homeCompletenessSymbol(assessment))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(homeCompletenessColor(assessment))
+                .accessibilityHidden(true)
+            Text(text("保护完整度", "Protection completeness"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+            if let score = assessment.score {
+                Text("\(score)")
+                    .routekeeperFont(.callout, weight: .semibold, monospacedDigit: true)
+                    .foregroundStyle(homeCompletenessColor(assessment))
+                Text(homeCompletenessBandTitle(assessment.band))
+                    .routekeeperFont(.caption2, weight: .medium)
+                    .foregroundStyle(.secondary)
+                Text("· \(homeEvidenceTitle(assessment.evidenceQuality))")
+                    .routekeeperFont(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text(homeCompletenessStateTitle(assessment.state))
+                    .routekeeperFont(.caption, weight: .medium)
+                    .foregroundStyle(homeCompletenessColor(assessment))
             }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            assessment.score.map {
+                text("保护完整度 \($0) 分，\(homeCompletenessBandTitle(assessment.band))",
+                     "Protection completeness \($0), \(homeCompletenessBandTitle(assessment.band))")
+            } ?? text("保护完整度，\(homeCompletenessStateTitle(assessment.state))",
+                      "Protection completeness, \(homeCompletenessStateTitle(assessment.state))")
+        )
+    }
+
+    private func homeCompletenessSymbol(_ assessment: ProtectionCompletenessAssessment) -> String {
+        switch assessment.evidenceQuality {
+        case .direct: return "point.3.connected.trianglepath.dotted"
+        case .crossChecked: return "checkmark.shield"
+        case .inferred, .insufficient: return "dot.radiowaves.left.and.right"
+        }
+    }
+
+    private func homeCompletenessColor(_ assessment: ProtectionCompletenessAssessment) -> Color {
+        guard let band = assessment.band else {
+            return assessment.state == .needsReview ? appStatusWarning : .secondary
+        }
+        switch band {
+        case .strong, .good: return appStatusSuccess
+        case .limited, .needsAttention: return appStatusWarning
+        }
+    }
+
+    private func homeCompletenessBandTitle(_ band: ProtectionCompletenessBand?) -> String {
+        switch band {
+        case .strong: return text("完整", "Strong")
+        case .good: return text("良好", "Good")
+        case .limited: return text("有限", "Limited")
+        case .needsAttention: return text("需处理", "Needs attention")
+        case nil: return ""
+        }
+    }
+
+    private func homeCompletenessStateTitle(_ state: ProtectionCompletenessState) -> String {
+        switch state {
+        case .notRun: return text("等待体检", "Waiting for a check")
+        case .incomplete: return text("暂不可评分", "Not enough evidence")
+        case .needsReview: return text("待复核", "Review needed")
+        case .scored: return ""
+        }
+    }
+
+    private func homeEvidenceTitle(_ quality: ProtectionEvidenceQuality) -> String {
+        switch quality {
+        case .direct: return text("实时连接证据", "Live connection evidence")
+        case .crossChecked: return text("交叉验证", "Cross-checked")
+        case .inferred: return text("本机推断", "Inferred locally")
+        case .insufficient: return text("证据不足", "Insufficient evidence")
+        }
+    }
+
+    private var homePrimaryActionButton: some View {
+        Button(action: homePrimaryAction) {
+            Label(homePrimaryTitle, systemImage: homePrimarySymbol)
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+        }
+        .routekeeperProminentButton()
+        .controlSize(.regular)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(store.checking)
+        .accessibilityIdentifier("home-primary")
+    }
+
+    private var homeHealthTitle: String {
+        if store.checking {
+            return text("正在体检", "Checking")
+        }
+        if store.policy.phase == .incident {
+            return text("发现网络异常", "Network incident")
+        }
+        if !homeUnresolvedChecks.isEmpty {
+            return text(
+                "\(homeUnresolvedChecks.count) 项待处理",
+                "\(homeUnresolvedChecks.count) need attention"
+            )
+        }
+        if store.settings.gatewayProtectionMode != .off,
+           store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) != .verified {
+            return text("代理网关待验证", "Gateway pending")
+        }
+        if store.snapshot == nil {
+            return text("尚未体检", "Not checked")
+        }
+        if let report = store.egressAudit.report {
+            switch report.assessment.level {
+            case .attention:
+                return text("出口检查需处理", "Egress check needs attention")
+            case .insufficient:
+                return text("出口证据不足", "Insufficient egress evidence")
+            case .clear:
+                break
+            }
+        } else {
+            return text("出口体检未完成", "Egress check incomplete")
+        }
+        return text("检查通过", "Check passed")
+    }
+
+    private var homeHealthSubtitle: String {
+        if store.checking {
+            return text(
+                "正在核对本机网络路径、出口证据与 Claude 服务。",
+                "Checking local network paths, egress evidence and Claude services."
+            )
+        }
+        if store.policy.phase == .incident {
+            return store.policy.reason
+        }
+        if !homeUnresolvedChecks.isEmpty {
+            return text(
+                "\(homeIssueAreas)存在未通过或待确认项，详情见网络体检。",
+                "\(homeIssueAreas) contains failed or unconfirmed checks. Review Network check for details."
+            )
+        }
+        if store.settings.gatewayProtectionMode != .off,
+           store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) != .verified {
+            return text(
+                "代理网关验证尚未完成。",
+                "Gateway verification is not complete."
+            )
+        }
+        if store.snapshot == nil {
+            return text(
+                "完成一次完整体检后可开启监控。",
+                "Run a full check before starting monitoring."
+            )
+        }
+        if let report = store.egressAudit.report {
+            switch report.assessment.level {
+            case .attention:
+                return text(
+                    "出口或服务探测发现需要核对的项目。",
+                    "The egress or service probes found items to review."
+                )
+            case .insufficient:
+                return text(
+                    "出口证据不足，缺失结果不会当作通过。",
+                    "Egress evidence is incomplete. Missing results are not treated as a pass."
+                )
+            case .clear:
+                break
+            }
+        } else {
+            return text(
+                "本机检查已完成，出口体检尚未完成。",
+                "The local check is complete, but the egress check is incomplete."
+            )
+        }
+        return store.monitoring
+            ? text("最近一次完整检查未发现需要处理的问题。",
+                   "The latest full check found nothing requiring attention.")
+            : text("检查已通过，可以开启监控。",
+                   "The check passed and monitoring can start.")
+    }
+
+    private var homeMonitoringStateBadge: some View {
+        let active = store.monitoring
+        let color: Color = store.policy.phase == .incident
+            ? appStatusFailure
+            : active ? appStatusSuccess : .secondary
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text(active ? text("监控运行中", "Monitoring") : text("监控未开启", "Monitoring off"))
+                .routekeeperFont(.caption2, weight: .medium)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.09), in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var homeDetailWorkspace: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                homePrimaryDetailCard
+                homeSecondaryDetailCard
+            }
+            VStack(alignment: .leading, spacing: 16) {
+                homePrimaryDetailCard
+                homeSecondaryDetailCard
+            }
+        }
+    }
+
+    private var homePrimaryDetailCard: some View {
+        homeProtectionSection
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .appSurface(.primary)
+    }
+
+    private var homeSecondaryDetailCard: some View {
+        Group {
+            if store.settings.gatewayProtectionMode != .off {
+                homeGatewaySection
+            } else {
+                homeEgressSection
+            }
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .appSurface(.primary)
     }
 
     private var homeGatewaySection: some View {
@@ -587,16 +863,13 @@ struct Dashboard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 AppSectionHeading(
-                    title: text("Claude 保护范围", "Claude protection"),
-                    subtitle: text("应用是否纳入监控，以及发现异常后的处理方式。",
-                                   "Which Claude apps are monitored and what happens after an incident.")
+                    title: text("保护范围", "Protection")
                 )
                 Spacer(minLength: 8)
                 Button {
-                    selectPage(.networkProtection)
+                    openNetworkProtection(at: .protectionMode)
                 } label: {
-                    Label(text("管理保护范围", "Manage protection"), systemImage: "chevron.right")
-                        .labelStyle(.titleAndIcon)
+                    Text(text("管理保护范围", "Manage protection"))
                 }
                 .buttonStyle(.borderless)
                 .routekeeperFont(.callout, weight: .medium)
@@ -608,10 +881,15 @@ struct Dashboard: View {
             AppHairline()
             homeProtectionRow(kind: .code)
             AppHairline()
-            HStack(spacing: 10) {
-                Label(text("发现异常时", "On incident"), systemImage: "bell.badge")
+            HStack(spacing: 12) {
+                Image(systemName: "bell.badge")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                    .accessibilityHidden(true)
+                Text(text("发现异常时", "On incident"))
                     .routekeeperFont(.callout)
-                Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(store.settings.action == .notify
                      ? text("仅提醒", "Notify only")
                      : text("请求退出所选进程", "Request selected exits"))
@@ -619,28 +897,38 @@ struct Dashboard: View {
                     .foregroundStyle(store.settings.action == .notify ? Color.secondary : Color.orange)
             }
             AppHairline()
-            HStack(spacing: 10) {
-                Image(systemName: store.events.contains(where: \.isAttention)
-                      ? "exclamationmark.triangle.fill"
-                      : "checkmark.circle")
-                    .foregroundStyle(store.events.contains(where: \.isAttention) ? Color.orange : Color.secondary)
-                    .frame(width: 22)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(text("最近异常", "Latest incident"))
-                        .routekeeperFont(.caption)
+            Button {
+                selectPage(.activity)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text(homeLatestAttentionText)
-                        .routekeeperFont(.callout)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                if let incident = store.events.first(where: \.isAttention) {
-                    Text(homeRelativeTime(incident.time))
-                        .routekeeperFont(.caption2)
+                        .frame(width: 22)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(text("最近记录", "Latest activity"))
+                            .routekeeperFont(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(homeLatestActivityText)
+                            .routekeeperFont(.callout)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    if let event = store.events.first {
+                        Text(homeRelativeTime(event.time))
+                            .routekeeperFont(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .routekeeperFont(.caption)
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("home-open-activity")
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
@@ -657,24 +945,24 @@ struct Dashboard: View {
         let running = store.snapshot?.processes.filter { $0.kind == kind }.count ?? 0
         let status: (title: String, color: Color) = {
             guard enabled else { return (text("未保护", "Not protected"), .secondary) }
-            guard installed else { return (text("未发现安装", "Not installed"), .orange) }
+            guard installed else { return (text("未发现安装", "Not installed"), appStatusWarning) }
             if running > 0 {
-                return (text("\(running) 个进程", "\(running) running"), Color.secondary)
+                return (text("\(running) 个进程", "\(running) running"), appStatusSuccess)
             }
-            return (text("已启用 · 等待启动", "On · waiting to launch"), .secondary)
+            return (text("已启用 · 等待启动", "On · waiting to launch"), appStatusWarning)
         }()
 
         HStack(spacing: 12) {
             Image(systemName: kind == .desktop ? "macwindow" : "terminal")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(status.color)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(kind == .desktop ? "Claude Desktop" : "Claude Code")
                     .routekeeperFont(.callout, weight: .medium)
                 Text(enabled
-                     ? text("已纳入异常检测", "Included in incident checks")
-                     : text("不会处理该应用的异常", "Excluded from incident handling"))
+                     ? text("已纳入监控", "Included in monitoring")
+                     : text("未纳入监控", "Excluded from monitoring"))
                     .routekeeperFont(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
@@ -690,9 +978,7 @@ struct Dashboard: View {
     private var homeEgressSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             AppSectionHeading(
-            title: text("最近出口体检", "Latest egress check"),
-            subtitle: text("出口一致性、IPv6、服务可达性与自动体检节奏。",
-                           "Exit consistency, IPv6, service reachability and automatic-check timing.")
+                title: text("最近出口体检", "Latest egress check")
             )
 
             if let report = store.egressAudit.report {
@@ -707,7 +993,7 @@ struct Dashboard: View {
                     title: text("主出口", "Primary exit"),
                     value: report.primaryIP ?? text("未取得", "Not observed"),
                     symbol: "network",
-                    color: report.primaryIP == nil ? .orange : .primary,
+                    color: report.primaryIP == nil ? appStatusWarning : .primary,
                     monospaced: report.primaryIP != nil
                 )
                 AppHairline()
@@ -725,14 +1011,14 @@ struct Dashboard: View {
                         "\(report.services.filter(\.reachedTLS).count)/\(report.services.count) reachable"
                     ),
                     symbol: "checkmark.icloud",
-                    color: report.services.allSatisfy(\.reachedTLS) ? .secondary : .orange
+                    color: report.services.allSatisfy(\.reachedTLS) ? appStatusSuccess : appStatusFailure
                 )
                 if let drift = store.egressAudit.drift {
                     Label(text("出口已从 \(drift.previousIP) 变化为 \(drift.currentIP)",
                                "Exit changed from \(drift.previousIP) to \(drift.currentIP)"),
                           systemImage: "arrow.triangle.swap")
                         .routekeeperFont(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(appStatusWarning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(homeNextAuditText)
@@ -744,7 +1030,9 @@ struct Dashboard: View {
                               "Last \(report.auditedAt.formatted(date: .abbreviated, time: .shortened))"))
                         .routekeeperFont(.caption2).foregroundStyle(.tertiary)
                     Spacer()
-                    Button(text("查看检查详情", "View evidence")) { selectPage(.inspection) }
+                    Button(text("查看检查详情", "View evidence")) {
+                        openNetworkProtection(at: .evidence)
+                    }
                         .buttonStyle(.borderless)
                         .routekeeperFont(.callout, weight: .medium)
                         .foregroundStyle(appAccent)
@@ -771,8 +1059,12 @@ struct Dashboard: View {
                 } label: {
                     Label(text("开始出口体检", "Run egress check"),
                           systemImage: "arrow.up.right")
+                        .labelStyle(.titleAndIcon)
                 }
-                .routekeeperSecondaryButton()
+                .buttonStyle(.borderless)
+                .routekeeperFont(.callout, weight: .medium)
+                .foregroundStyle(appAccent)
+                .accessibilityIdentifier("home-open-egress-check")
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
@@ -803,22 +1095,32 @@ struct Dashboard: View {
         .accessibilityLabel("\(title), \(value)")
     }
 
-    private var homePassedChecks: Int {
-        store.snapshot?.checks.filter { $0.level == .passed }.count ?? 0
+    private var homeSnapshotChecks: [CheckItem] {
+        store.snapshot?.checks.filter { $0.id != "boundary" } ?? []
     }
 
-    private var homeAttentionChecks: Int {
-        store.snapshot?.checks.filter(\.needsAttention).count ?? 0
+    private var homeSnapshotHasFailure: Bool {
+        homeSnapshotChecks.contains { $0.level == .failed }
     }
 
-    private var homeCheckSummary: String {
-        guard homeAttentionChecks > 0 else { return text("项检查通过", "checks passed") }
-        return text("\(homeAttentionChecks) 项待处理", "\(homeAttentionChecks) need attention")
+    private var homeSnapshotHasWarning: Bool {
+        homeSnapshotChecks.contains { $0.level == .warning || $0.level == .unknown }
     }
 
-    private var homeLatestAttentionText: String {
-        store.events.first(where: \.isAttention)?.message
-            ?? text("近期没有记录到需要处理的异常", "No incident requiring attention in recent history")
+    private var homeUnresolvedChecks: [CheckItem] {
+        homeSnapshotChecks.filter { $0.level != .passed }
+    }
+
+    private var homeIssueAreas: String {
+        let separator = L10n.resolvedEnglish ? ", " : "、"
+        return InspectionCheckGrouping.groups(from: homeUnresolvedChecks)
+            .map(\.kind.title)
+            .joined(separator: separator)
+    }
+
+    private var homeLatestActivityText: String {
+        store.events.first?.message
+            ?? text("暂无记录", "No activity")
     }
 
     private var homeNextAuditText: String {
@@ -864,11 +1166,7 @@ struct Dashboard: View {
     }
 
     private func homeAssessmentColor(_ level: EgressAssessmentLevel) -> Color {
-        switch level {
-        case .clear: return .secondary
-        case .attention: return .orange
-        case .insufficient: return .secondary
-        }
+        level.routekeeperStatusColor
     }
 
     private func homeIPv6Title(_ state: IPv6ExposureState?) -> String {
@@ -895,20 +1193,28 @@ struct Dashboard: View {
 
     private func homeIPv6Color(_ state: IPv6ExposureState?) -> Color {
         switch state {
-        case .disabled, .tunneled: return .secondary
-        case .noClaudePath: return .secondary
-        case .tunnelUnconfirmed, .tunnelExitMismatch, .directExposure, .unknown, nil: return .orange
+        case .disabled, .tunneled, .noClaudePath: return appStatusSuccess
+        case .tunnelUnconfirmed, .unknown, nil: return appStatusWarning
+        case .tunnelExitMismatch, .directExposure: return appStatusFailure
         }
     }
 
     var homePrimaryTitle: String {
         if store.monitoring { return L("action.stopMonitor") }
+        if store.snapshot == nil { return text("立即体检", "Check now") }
+        if homeNeedsReview { return text("查看并处理", "Review and resolve") }
         if store.snapshot?.ready == true && canStartMonitoring { return L("action.startMonitor") }
-        return text("立即体检", "Check now")
+        if store.egressAudit.report == nil
+            || store.egressAudit.report?.assessment.level == .insufficient {
+            return text("继续体检", "Continue check")
+        }
+        return text("查看并处理", "Review and resolve")
     }
 
     var homePrimarySymbol: String {
         if store.monitoring { return "stop.fill" }
+        if store.snapshot == nil { return "waveform.path.ecg.rectangle" }
+        if homeNeedsReview { return "arrow.up.right" }
         if store.snapshot?.ready == true && canStartMonitoring { return "shield.fill" }
         return "waveform.path.ecg.rectangle"
     }
@@ -919,12 +1225,8 @@ struct Dashboard: View {
         } else if store.snapshot?.ready == true && canStartMonitoring {
             Task { await store.start() }
         } else {
-            page = .inspection
+            selectPage(.inspection)
         }
-    }
-
-    var headline: String {
-        store.policy.phase == .incident ? L("overview.incident") : store.monitoring ? L("overview.armed") : L("overview.unmonitored")
     }
 
     var canStartMonitoring: Bool {
@@ -932,17 +1234,24 @@ struct Dashboard: View {
             && (store.settings.target(for: .ipv4) != nil || store.settings.target(for: .ipv6) != nil)
     }
 
-    var showsInlineCheckAction: Bool {
-        !store.monitoring && !(store.snapshot?.ready == true && canStartMonitoring)
+    private var homeNeedsReview: Bool {
+        if store.policy.phase == .incident { return true }
+        if !homeUnresolvedChecks.isEmpty { return true }
+        if store.egressAudit.report?.assessment.level == .attention { return true }
+        if store.settings.gatewayProtectionMode != .off,
+           store.gatewayVerification.status(for: store.settings.gatewayProtectionMode) != .verified {
+            return true
+        }
+        return false
     }
 
     func homeSummaryRow(id: String, title: String, symbol: String) -> some View {
         let check = store.snapshot?.checks.first { $0.id == id }
-        let color: Color = check?.level == .passed ? .primary : check?.level == .failed ? .orange : .secondary
+        let color = check?.level.routekeeperStatusColor ?? Color.secondary
         return HStack(spacing: 12) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(color)
                 .frame(width: 20)
             Text(title).routekeeperFont(.callout).foregroundStyle(.secondary)
             Spacer()
@@ -984,11 +1293,7 @@ struct Dashboard: View {
     }
 
     private func homeGatewayColor(_ status: GatewayVerificationStatus) -> Color {
-        switch status {
-        case .verified: return appAccent
-        case .failed, .expired: return .orange
-        case .unverified, .needsNodeFailureTest, .needsClientExitTest, .needsRecovery: return .secondary
-        }
+        status.routekeeperStatusColor
     }
 
     private func homeGatewayModeTitle(_ mode: GatewayProtectionMode) -> String {
@@ -1012,7 +1317,7 @@ struct Dashboard: View {
                             .frame(width: 70 * textScale, alignment: .leading)
                             if event.isAttention {
                                 Label(text("需注意", "Attention"), systemImage: "exclamationmark.triangle.fill")
-                                    .routekeeperFont(.caption, weight: .semibold).foregroundStyle(.orange)
+                                    .routekeeperFont(.caption, weight: .semibold).foregroundStyle(appStatusFailure)
                             }
                             Text(event.message).routekeeperFont(.callout).textSelection(.enabled)
                             Spacer(minLength: 0)
@@ -1151,24 +1456,6 @@ struct Dashboard: View {
                 }
             }
 
-            if store.cleanupPlan != nil {
-                AppHairline()
-                HStack(spacing: 12) {
-                    Button(text("全选可清理", "Select cleanable")) {
-                        store.selectAllCleanupTargets()
-                    }
-                    .buttonStyle(.borderless)
-                    .routekeeperFont(.caption)
-                    Button(text("清除", "Clear")) {
-                        store.cleanupSelection.removeAll()
-                        store.cleanupIncludesLocalData = false
-                    }
-                    .buttonStyle(.borderless)
-                    .routekeeperFont(.caption)
-                    Spacer()
-                }
-            }
-
             if !store.cleanupResult.isEmpty {
                 Label(store.cleanupResult, systemImage: "checkmark.circle")
                     .routekeeperFont(.callout)
@@ -1197,7 +1484,7 @@ struct Dashboard: View {
                     systemImage: "shippingbox"
                 )
                 Label(
-                    text("带 Routekeeper 归属标记的会话和持久登录 profile 临时数据",
+                    text("带 Routekeeper 归属标记的会话和持久登录临时数据",
                          "Session and persistent-profile temporary data carrying a Routekeeper ownership marker"),
                     systemImage: "checkmark.seal"
                 )
@@ -1223,11 +1510,58 @@ struct Dashboard: View {
     }
 
     private var cleanupSelectionCard: some View {
-        GuardCard(
-            title: text("清理范围", "Cleanup scope"),
-            subtitle: text("按来源分组；安全缓存默认选中，可展开逐项调整。",
-                           "Grouped by source; safe caches are selected by default and can be adjusted individually.")
-        ) {
+        let selectableIDs = Set(store.cleanupCandidates.filter(\.isSelectable).map(\.id))
+        let selectedIDs = selectableIDs.intersection(store.cleanupSelection)
+        let allSelected = !selectableIDs.isEmpty && selectedIDs.count == selectableIDs.count
+        let partiallySelected = !selectedIDs.isEmpty && !allSelected
+        let symbol = allSelected
+            ? "checkmark.square.fill"
+            : partiallySelected ? "minus.square.fill" : "square"
+        let actionHelp = allSelected
+            ? text("清除全部选择", "Clear all selections")
+            : text("全选可清理项目", "Select all cleanable items")
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                Button {
+                    if allSelected {
+                        store.cleanupSelection.subtract(selectableIDs)
+                    } else {
+                        store.cleanupSelection.formUnion(selectableIDs)
+                    }
+                } label: {
+                    Image(systemName: symbol)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(
+                            allSelected || partiallySelected ? appAccent : Color.secondary
+                        )
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(selectableIDs.isEmpty)
+                .help(actionHelp)
+                .accessibilityLabel(actionHelp)
+                .accessibilityValue(text(
+                    "已选择 \(selectedIDs.count) 项，共 \(selectableIDs.count) 项",
+                    "\(selectedIDs.count) of \(selectableIDs.count) selected"
+                ))
+                .accessibilityIdentifier("cleanup-selection-toggle")
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(text("清理范围", "Cleanup scope"))
+                        .routekeeperFont(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(text(
+                        "按来源分组；安全缓存默认选中，历史沙箱默认关闭，可展开逐项调整。",
+                        "Grouped by source; safe caches are selected by default, past sandboxes are off by default, and every group can be adjusted."
+                    ))
+                    .routekeeperFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             if store.cleanupCandidates.isEmpty {
                 Label(
                     text("没有发现可清理的缓存或日志", "No cleanable caches or logs found"),
@@ -1252,6 +1586,10 @@ struct Dashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .appSurface(.primary)
+        .accessibilityElement(children: .contain)
         .disabled(store.cleanupBusy)
     }
 
@@ -1506,7 +1844,7 @@ struct Dashboard: View {
         case .hostScience: return text("宿主 Claude Science", "Host Claude Science")
         case .currentSession: return text("当前 Routekeeper 沙箱", "Current Routekeeper sandbox")
         case .pastSession: return text("历史 Routekeeper 沙箱", "Past Routekeeper sandboxes")
-        case .persistentProfile: return text("持久登录 sandbox profile", "Persistent sign-in sandbox profile")
+        case .persistentProfile: return text("持久登录沙箱数据", "Persistent sign-in sandbox profile")
         }
     }
 
@@ -1590,7 +1928,7 @@ struct Dashboard: View {
         case .sessionRunning:
             return text("该沙箱会话仍在运行，结束后再清理。", "This sandbox session is running; clean after it ends.")
         case .profileInUse:
-            return text("持久登录 profile 正被运行中的沙箱使用。", "The persistent sign-in profile is in use by a running sandbox.")
+            return text("持久登录数据正被运行中的沙箱使用。", "The persistent sign-in profile is in use by a running sandbox.")
         case .processInspectionUnavailable:
             return text("无法核验进程状态，已按失败关闭策略锁定。", "Process state cannot be inspected, so the target is locked fail-closed.")
         }
@@ -1704,7 +2042,7 @@ struct GuardCard<Content: View>: View {
 struct CheckRow: View {
     let row: CheckItem
     @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
-    var color: Color { row.level == .passed ? .secondary : row.level == .warning ? .secondary : .orange }
+    var color: Color { row.level.routekeeperStatusColor }
     var symbol: String { row.level == .passed ? "checkmark.circle" : row.level == .warning ? "info.circle" : row.level == .unknown ? "questionmark.circle.fill" : "exclamationmark.circle.fill" }
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
