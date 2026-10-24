@@ -4,20 +4,46 @@ import SystemConfiguration
 import Darwin
 
 public struct CommandResult: Sendable { public var status: Int32; public var output: String }
+
+private final class CommandOutputBox: @unchecked Sendable {
+    var data = Data()
+}
+
 public enum Command {
-    public static func run(_ path: String, _ arguments: [String], timeout: TimeInterval = 8) -> CommandResult {
+    public static func run(
+        _ path: String,
+        _ arguments: [String],
+        timeout: TimeInterval = 8,
+        outputLimit: Int = 64_000
+    ) -> CommandResult {
         let p = Process(); let pipe = Pipe()
         p.executableURL = URL(fileURLWithPath: path); p.arguments = arguments
         p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
         // The probes never inherit proxy credentials, curl settings, or user shell initialization.
         p.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "HOME": NSHomeDirectory()]
         do { try p.run() } catch { return .init(status: -1, output: "无法执行 \(URL(fileURLWithPath: path).lastPathComponent)") }
+        // Drain stdout while the child is running. Waiting first can deadlock
+        // when command output fills the pipe buffer, notably for full ps output.
+        let outputBox = CommandOutputBox()
+        let outputReady = DispatchGroup()
+        outputReady.enter()
+        // A dedicated thread keeps command output draining even when concurrent
+        // signature checks temporarily exhaust the shared dispatch worker pool.
+        Thread.detachNewThread {
+            outputBox.data = pipe.fileHandleForReading.readDataToEndOfFile()
+            outputReady.leave()
+        }
         let deadline = Date().addingTimeInterval(timeout)
         while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.025) }
         if p.isRunning { p.terminate(); Thread.sleep(forTimeInterval: 0.1); if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
         p.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return .init(status: p.terminationStatus, output: String(decoding: data.prefix(64_000), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        outputReady.wait()
+        let data = outputBox.data
+        return .init(
+            status: p.terminationStatus,
+            output: String(decoding: data.prefix(max(1, outputLimit)), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 }
 public struct ProxyEndpoint: Sendable, Equatable {

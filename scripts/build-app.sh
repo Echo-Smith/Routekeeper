@@ -10,6 +10,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 rm -rf "$APP/Contents/Library/SystemExtensions/local.routekeeper.macos.filter.systemextension"
 rm -f "$APP/Contents/embedded.provisionprofile"
 rm -f "$APP/Contents/Resources/AppIcon.icns"
+rm -f "$APP/Contents/Resources/Assets.car"
+rm -f "$APP/Contents/Resources/AppIcon-Glass.icns"
+rm -f "$APP/Contents/Resources/AppIcon-Routekeeper.icns"
 cp "$BIN_DIR/Routekeeper" "$APP/Contents/MacOS/Routekeeper"
 # SwiftPM currently records the deployment target in LC_BUILD_VERSION's SDK
 # field. Correct it so AppKit can opt into the SDK's current window appearance.
@@ -17,8 +20,20 @@ xcrun vtool -set-build-version macos 14.0 "$(xcrun --sdk macosx --show-sdk-versi
     -replace -output "$APP/Contents/MacOS/Routekeeper.sdk" \
     "$APP/Contents/MacOS/Routekeeper"
 mv "$APP/Contents/MacOS/Routekeeper.sdk" "$APP/Contents/MacOS/Routekeeper"
-swift scripts/make-icon.swift "$BUILD_ROOT/Guard.iconset"
-iconutil -c icns "$BUILD_ROOT/Guard.iconset" -o "$APP/Contents/Resources/AppIcon-Glass.icns"
+rm -rf "$BUILD_ROOT/Guard.iconset" "$BUILD_ROOT/AppIcon.icon" "$BUILD_ROOT/IconCompile"
+swift scripts/make-icon.swift "$BUILD_ROOT/Guard.iconset" "$BUILD_ROOT/AppIcon.icon"
+mkdir -p "$BUILD_ROOT/IconCompile"
+xcrun actool \
+    --compile "$BUILD_ROOT/IconCompile" \
+    --platform macosx \
+    --minimum-deployment-target 14.0 \
+    --app-icon AppIcon \
+    --standalone-icon-behavior all \
+    --output-partial-info-plist "$BUILD_ROOT/IconCompile/partial-info.plist" \
+    --output-format human-readable-text \
+    "$BUILD_ROOT/AppIcon.icon"
+cp "$BUILD_ROOT/IconCompile/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$BUILD_ROOT/IconCompile/Assets.car" "$APP/Contents/Resources/Assets.car"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,10 +42,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Routekeeper</string>
 <key>CFBundleDisplayName</key><string>Routekeeper</string>
 <key>CFBundleExecutable</key><string>Routekeeper</string>
-<key>CFBundleIconFile</key><string>AppIcon-Glass</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.3.12</string>
-<key>CFBundleVersion</key><string>22</string>
+<key>CFBundleVersion</key><string>24</string>
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleLocalizations</key>
 <array>
@@ -45,6 +61,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 mkdir -p "$APP/Contents/Resources/en.lproj" "$APP/Contents/Resources/zh-Hans.lproj"
-codesign --force --sign - "$APP"
+if [[ -n "${ROUTEKEEPER_SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --timestamp \
+        --sign "$ROUTEKEEPER_SIGN_IDENTITY" "$APP"
+else
+    codesign --force --sign - "$APP"
+fi
 codesign --verify --strict "$APP"
 printf '%s\n' "$APP"

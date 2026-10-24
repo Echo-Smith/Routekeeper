@@ -41,7 +41,7 @@ public enum IsolationApplicationTarget: String, Codable, CaseIterable, Hashable,
     public var title: String {
         switch self {
         case .claudeCode: return "Claude Code"
-        case .claudeDesktop: return "Claude Desktop"
+        case .claudeDesktop: return "Claude"
         }
     }
 
@@ -237,13 +237,56 @@ public enum IsolationSessionEnvironment {
         }
     }
 
+    public static func defaultLanguageIdentifier(forCountryCode countryCode: String) -> String? {
+        switch countryCode.uppercased() {
+        case "CN": return "zh-Hans"
+        case "HK": return "zh-Hant-HK"
+        case "TW": return "zh-Hant"
+        case "JP": return "ja-JP"
+        case "KR": return "ko-KR"
+        case "GB": return "en-GB"
+        case "AU": return "en-AU"
+        case "CA": return "en-CA"
+        case "FR": return "fr-FR"
+        case "DE": return "de-DE"
+        case "ES": return "es-ES"
+        case "MX": return "es-MX"
+        case "BR": return "pt-BR"
+        case "PT": return "pt-PT"
+        case "IT": return "it-IT"
+        case "NL": return "nl-NL"
+        case "SE": return "sv-SE"
+        case "DK": return "da-DK"
+        case "FI": return "fi-FI"
+        case "NO": return "nb-NO"
+        case "PL": return "pl-PL"
+        case "RU": return "ru-RU"
+        case "UA": return "uk-UA"
+        case "TR": return "tr-TR"
+        case "IN": return "en-IN"
+        case "TH": return "th-TH"
+        case "VN": return "vi-VN"
+        case "ID": return "id-ID"
+        case "MY": return "ms-MY"
+        case "SG": return "en-SG"
+        case "US": return "en-US"
+        default: return nil
+        }
+    }
+
     public static func normalizedLanguageIdentifier(_ value: String) -> String? {
         let normalized = value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "_", with: "-")
-        guard !normalized.isEmpty, normalized.count <= 35 else { return nil }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-"))
-        guard normalized.unicodeScalars.allSatisfy(allowed.contains),
+        // Language tags are ASCII; avoid Foundation CharacterSet here because the
+        // Release optimizer can mis-evaluate this validation path.
+        guard !normalized.isEmpty, normalized.utf8.count <= 35,
+              normalized.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte)
+                      || (65...90).contains(byte)
+                      || (97...122).contains(byte)
+                      || byte == 45
+              }),
               let primary = normalized.split(separator: "-").first,
               (2...3).contains(primary.count) else {
             return nil
@@ -252,11 +295,17 @@ public enum IsolationSessionEnvironment {
         let canonical = components.enumerated().map { index, component -> String in
             let value = String(component)
             if index == 0 { return value.lowercased() }
-            if value.count == 4, value.allSatisfy(\.isLetter) {
+            if value.utf8.count == 4,
+               value.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) }) {
                 return value.prefix(1).uppercased() + value.dropFirst().lowercased()
             }
-            if (value.count == 2 || value.count == 3),
-               value.allSatisfy(\.isNumber) || value.allSatisfy(\.isLetter) {
+            if [2, 3].contains(value.utf8.count),
+               (
+                   value.utf8.allSatisfy({ (48...57).contains($0) })
+                       || value.utf8.allSatisfy({
+                           (65...90).contains($0) || (97...122).contains($0)
+                       })
+               ) {
                 return value.uppercased()
             }
             return value.lowercased()
@@ -426,6 +475,7 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
     public var exchangePath: String
     public var timezoneIdentifier: String
     public var languageIdentifier: String
+    public var usesEgressRegionalDefaults: Bool
     public var upstream: IsolationUpstream
     public var enabledTargets: Set<IsolationApplicationTarget>
     public var persistClaudeLogin: Bool
@@ -435,6 +485,7 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
         exchangePath: String = "",
         timezoneIdentifier: String = TimeZone.current.identifier,
         languageIdentifier: String? = nil,
+        usesEgressRegionalDefaults: Bool = true,
         upstream: IsolationUpstream = IsolationUpstream(),
         enabledTargets: Set<IsolationApplicationTarget> = [.claudeCode, .claudeDesktop],
         persistClaudeLogin: Bool = false
@@ -444,6 +495,7 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
         self.timezoneIdentifier = timezoneIdentifier
         self.languageIdentifier = languageIdentifier
             ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezoneIdentifier)
+        self.usesEgressRegionalDefaults = usesEgressRegionalDefaults
         self.upstream = upstream
         self.enabledTargets = enabledTargets
         self.persistClaudeLogin = persistClaudeLogin
@@ -454,13 +506,14 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
         exchangePath = legacy.exchangePath
         timezoneIdentifier = legacy.timezoneIdentifier
         languageIdentifier = legacy.languageIdentifier
+        usesEgressRegionalDefaults = false
         upstream = legacy.upstream
         enabledTargets = [legacy.target]
         persistClaudeLogin = legacy.persistClaudeLogin
     }
 
     enum CodingKeys: String, CodingKey {
-        case projectPath, exchangePath, timezoneIdentifier, languageIdentifier,
+        case projectPath, exchangePath, timezoneIdentifier, languageIdentifier, usesEgressRegionalDefaults,
              upstream, enabledTargets, persistClaudeLogin
     }
 
@@ -473,6 +526,11 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
         timezoneIdentifier = timezone
         languageIdentifier = try container.decodeIfPresent(String.self, forKey: .languageIdentifier)
             ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezone)
+        // Existing values may have been entered manually; never replace them after an upgrade.
+        usesEgressRegionalDefaults = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .usesEgressRegionalDefaults
+        ) ?? false
         upstream = try container.decodeIfPresent(IsolationUpstream.self, forKey: .upstream)
             ?? IsolationUpstream()
         enabledTargets = try container.decodeIfPresent(
@@ -489,6 +547,7 @@ public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
         try container.encode(exchangePath, forKey: .exchangePath)
         try container.encode(timezoneIdentifier, forKey: .timezoneIdentifier)
         try container.encode(languageIdentifier, forKey: .languageIdentifier)
+        try container.encode(usesEgressRegionalDefaults, forKey: .usesEgressRegionalDefaults)
         try container.encode(upstream, forKey: .upstream)
         try container.encode(enabledTargets, forKey: .enabledTargets)
         try container.encode(persistClaudeLogin, forKey: .persistClaudeLogin)
@@ -536,11 +595,12 @@ public struct IsolationSessionLayout: Equatable, Sendable {
     public var logs: URL
     public var profile: URL
 
-    public init(root: URL) {
+    public init(root: URL, workspace: URL? = nil) {
         self.root = root
         home = self.root.appendingPathComponent("home", isDirectory: true)
         temporary = self.root.appendingPathComponent("tmp", isDirectory: true)
-        workspace = self.root.appendingPathComponent("workspace", isDirectory: true)
+        self.workspace = workspace
+            ?? self.root.appendingPathComponent("workspace", isDirectory: true)
         control = self.root.appendingPathComponent("control", isDirectory: true)
         logs = self.root.appendingPathComponent("logs", isDirectory: true)
         profile = self.root.appendingPathComponent("control/session.sb", isDirectory: false)
@@ -618,6 +678,7 @@ public enum IsolationPathValidator {
         _ configuration: IsolationConfiguration,
         sessionRoot: URL,
         home: URL,
+        workspace: URL? = nil,
         fileManager: FileManager = .default
     ) throws -> IsolationResolvedPaths {
         let projectText = configuration.projectPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -656,22 +717,34 @@ public enum IsolationPathValidator {
                 throw IsolationValidationError.pathsOverlap
             }
         }
-        for path in [project, exchange].compactMap({ $0 }) {
-            guard !contains(root, path), !contains(path, root) else {
-                throw IsolationValidationError.unsafePath(root.path)
+        let workspaceURL = canonicalURL(
+            workspace ?? root.appendingPathComponent("workspace", isDirectory: true)
+        )
+        guard workspaceURL.path != "/", workspaceURL.path != realHome.path else {
+            throw IsolationValidationError.unsafePath(workspaceURL.path)
+        }
+        for boundary in [root, workspaceURL] {
+            for path in [project, exchange].compactMap({ $0 }) {
+                guard !contains(boundary, path), !contains(path, boundary) else {
+                    throw IsolationValidationError.unsafePath(boundary.path)
+                }
             }
         }
         guard contains(realApplicationSupport, root) else {
             throw IsolationValidationError.sessionRootOutsideApplicationSupport
         }
 
-        let layout = IsolationSessionLayout(root: root)
+        let layout = IsolationSessionLayout(root: root, workspace: workspaceURL)
         return IsolationResolvedPaths(originalProject: project, exchange: exchange, layout: layout)
     }
 
     public static func contains(_ parent: URL, _ child: URL) -> Bool {
-        let parentPath = parent.standardizedFileURL.path
-        let childPath = child.standardizedFileURL.path
+        let parentPath = parent.path.hasSuffix("/")
+            ? String(parent.path.dropLast())
+            : parent.path
+        let childPath = child.path.hasSuffix("/")
+            ? String(child.path.dropLast())
+            : child.path
         return childPath == parentPath || childPath.hasPrefix(parentPath.hasSuffix("/") ? parentPath : parentPath + "/")
     }
 

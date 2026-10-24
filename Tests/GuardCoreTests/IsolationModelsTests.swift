@@ -356,7 +356,7 @@ final class IsolationModelsTests: XCTestCase {
         )
         XCTAssertEqual(configuration.target, .claudeCode)
         XCTAssertFalse(configuration.persistClaudeLogin)
-        XCTAssertEqual(IsolationApplicationTarget.claudeDesktop.title, "Claude Desktop")
+        XCTAssertEqual(IsolationApplicationTarget.claudeDesktop.title, "Claude")
 
         let encoded = try JSONEncoder().encode(configuration)
         let roundTrip = try JSONDecoder().decode(IsolationConfiguration.self, from: encoded)
@@ -596,11 +596,21 @@ final class IsolationModelsTests: XCTestCase {
     func testDesktopLocaleLaunchArgumentsOverrideMacOSUILanguage() {
         XCTAssertEqual(
             SandboxSession.desktopLocaleLaunchArguments(for: "America/Los_Angeles"),
-            ["-AppleLanguages", "(en-US)", "-AppleLocale", "en_US"]
+            [
+                "-AppleLanguages", "(en-US)",
+                "-AppleLocale", "en_US",
+                "--lang=en-US",
+                "--accept-lang=en-US,en"
+            ]
         )
         XCTAssertEqual(
             SandboxSession.desktopLocaleLaunchArguments(for: "Asia/Shanghai"),
-            ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+            [
+                "-AppleLanguages", "(zh-Hans)",
+                "-AppleLocale", "zh_CN",
+                "--lang=zh-Hans",
+                "--accept-lang=zh-Hans,zh"
+            ]
         )
     }
 

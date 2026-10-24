@@ -1,5 +1,10 @@
 # Routekeeper 0.3.10 交接说明
 
+> [!WARNING]
+> 本文是 0.3.10 的内部交接快照，版本号、测试数量和功能状态均已过时。
+> 当前对外说明以 `README.zh-CN.md`、`docs/FEATURES.zh-CN.md`、`TERMS.zh-CN.md`
+> 和 `PRIVACY.zh-CN.md` 为准；本文不包含在建议公开的首发资料清单中。
+
 日期：2026-10-21；平台：macOS 14+。详细使用见 README，需求及设计见 `specs/network-v2/`，真实故障验收见 `docs/network-v2-verification.md`，当前 UI 设计记录见 `docs/design.md`。
 
 ## 0.3.10 当前交付

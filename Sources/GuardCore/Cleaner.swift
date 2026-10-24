@@ -8,6 +8,7 @@ public enum CleanupScope: String, CaseIterable, Sendable, Equatable {
     case currentSession
     case pastSession
     case persistentProfile
+    case workspace
 }
 
 public enum CleanupBlockReason: String, Sendable, Equatable {
@@ -101,6 +102,7 @@ public struct CleanupSafetyContext: Sendable, Equatable {
     public var scienceRunning: Bool
     public var runningSessionRoots: Set<String>
     public var runningSessionProfiles: Set<String>
+    public var runningWorkspaceRoots: Set<String>
 
     public init(
         processInspectionAvailable: Bool,
@@ -108,7 +110,8 @@ public struct CleanupSafetyContext: Sendable, Equatable {
         codeRunning: Bool = false,
         scienceRunning: Bool = false,
         runningSessionRoots: Set<String> = [],
-        runningSessionProfiles: Set<String> = []
+        runningSessionProfiles: Set<String> = [],
+        runningWorkspaceRoots: Set<String> = []
     ) {
         self.processInspectionAvailable = processInspectionAvailable
         self.desktopRunning = desktopRunning
@@ -116,6 +119,7 @@ public struct CleanupSafetyContext: Sendable, Equatable {
         self.scienceRunning = scienceRunning
         self.runningSessionRoots = runningSessionRoots
         self.runningSessionProfiles = runningSessionProfiles
+        self.runningWorkspaceRoots = runningWorkspaceRoots
     }
 }
 
@@ -190,11 +194,12 @@ public enum CacheCleaner {
         hostDefinitions(home: home).map { ($0.path, $0.labelZh, $0.kindZh) }
     }
 
-    /// Scans only exact, declared cache/log paths. Session and profile roots are
-    /// included only when Routekeeper's ownership marker is present.
+    /// Scans only exact, declared cache/log paths. Session, profile and user
+    /// workspace roots are included only when Routekeeper's marker is present.
     public static func scan(
         home: String,
         sessionsRoot: URL? = nil,
+        workspacesRoot: URL? = nil,
         profilesRoot: URL? = nil,
         currentSessionRoot: URL? = nil,
         currentSessionRoots: Set<URL> = []
@@ -202,6 +207,8 @@ public enum CacheCleaner {
         let homeURL = URL(fileURLWithPath: home, isDirectory: true)
         let applicationSupport = homeURL.appendingPathComponent("Library/Application Support/Routekeeper", isDirectory: true)
         let resolvedSessionsRoot = sessionsRoot ?? applicationSupport.appendingPathComponent("Isolation", isDirectory: true)
+        let resolvedWorkspacesRoot = workspacesRoot
+            ?? homeURL.appendingPathComponent("Routekeeper/Workspaces", isDirectory: true)
         let resolvedProfilesRoot = profilesRoot ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
         let profileHome = resolvedProfilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
 
@@ -223,6 +230,21 @@ public enum CacheCleaner {
             warnings.append(
                 "已跳过 \(unowned) 个没有 Routekeeper 会话标记的目录；不会清理无法确认归属的数据。"
             )
+        }
+
+        for workspace in ownedWorkspaceContainers(
+            in: resolvedWorkspacesRoot,
+            sessionsRoot: resolvedSessionsRoot
+        ) {
+            definitions.append(Definition(
+                path: workspace.container.path,
+                labelZh: "用户工作副本 · \(workspace.container.lastPathComponent)",
+                labelEn: "User workspace · \(workspace.container.lastPathComponent)",
+                kindZh: "可在 Finder 中打开的项目副本",
+                kindEn: "Project copy available in Finder",
+                scope: .workspace,
+                owningRoot: workspace.sessionRoot.path
+            ))
         }
 
         if ownsProfile(profileHome) {
@@ -260,6 +282,7 @@ public enum CacheCleaner {
     public static func scanWithLiveSafety(
         home: String,
         sessionsRoot: URL? = nil,
+        workspacesRoot: URL? = nil,
         profilesRoot: URL? = nil,
         currentSessionRoot: URL? = nil,
         currentSessionRoots: Set<URL> = []
@@ -267,6 +290,7 @@ public enum CacheCleaner {
         var plan = scan(
             home: home,
             sessionsRoot: sessionsRoot,
+            workspacesRoot: workspacesRoot,
             profilesRoot: profilesRoot,
             currentSessionRoot: currentSessionRoot,
             currentSessionRoots: currentSessionRoots
@@ -274,6 +298,7 @@ public enum CacheCleaner {
         let safety = liveSafety(
             home: home,
             sessionsRoot: sessionsRoot,
+            workspacesRoot: workspacesRoot,
             profilesRoot: profilesRoot
         )
         plan.targets = plan.targets.map { target in
@@ -289,11 +314,14 @@ public enum CacheCleaner {
     public static func liveSafety(
         home: String = NSHomeDirectory(),
         sessionsRoot: URL? = nil,
+        workspacesRoot: URL? = nil,
         profilesRoot: URL? = nil
     ) -> CleanupSafetyContext {
         let homeURL = URL(fileURLWithPath: home, isDirectory: true)
         let applicationSupport = homeURL.appendingPathComponent("Library/Application Support/Routekeeper", isDirectory: true)
         let resolvedSessionsRoot = sessionsRoot ?? applicationSupport.appendingPathComponent("Isolation", isDirectory: true)
+        let resolvedWorkspacesRoot = workspacesRoot
+            ?? homeURL.appendingPathComponent("Routekeeper/Workspaces", isDirectory: true)
         let resolvedProfilesRoot = profilesRoot ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
         let profileHome = resolvedProfilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
         let desktopRoot = ApplicationDiscovery.path(bundleID: ApplicationDiscovery.desktopID, name: "Claude")
@@ -310,6 +338,7 @@ public enum CacheCleaner {
         let sessions = ownedSessionRoots(in: resolvedSessionsRoot, warnings: &warnings)
         var runningRoots = Set<String>()
         var profilesInUse = Set<String>()
+        var runningWorkspaceRoots = Set<String>()
         for root in sessions where sessionIsRunning(root) {
             runningRoots.insert(root.standardizedFileURL.path)
             guard ownsProfile(profileHome) else { continue }
@@ -325,6 +354,13 @@ public enum CacheCleaner {
                 profilesInUse.insert(profilePath)
             }
         }
+        for workspace in ownedWorkspaceContainers(
+            in: resolvedWorkspacesRoot,
+            sessionsRoot: resolvedSessionsRoot
+        )
+            where sessionIsRunning(workspace.sessionRoot) {
+            runningWorkspaceRoots.insert(workspace.container.standardizedFileURL.path)
+        }
 
         return CleanupSafetyContext(
             processInspectionAvailable: processScan.available,
@@ -333,7 +369,8 @@ public enum CacheCleaner {
             codeRunning: processScan.records.contains { $0.kind == .code },
             scienceRunning: scienceRunning,
             runningSessionRoots: runningRoots,
-            runningSessionProfiles: profilesInUse
+            runningSessionProfiles: profilesInUse,
+            runningWorkspaceRoots: runningWorkspaceRoots
         )
     }
 
@@ -357,6 +394,9 @@ public enum CacheCleaner {
         case .persistentProfile:
             guard let root = target.owningRoot else { return .processInspectionUnavailable }
             return safety.runningSessionProfiles.contains(root) ? .profileInUse : nil
+        case .workspace:
+            let root = URL(fileURLWithPath: target.path).standardizedFileURL.path
+            return safety.runningWorkspaceRoots.contains(root) ? .sessionRunning : nil
         }
     }
 
@@ -780,6 +820,80 @@ public enum CacheCleaner {
             }
             return ownsSession(entry)
         }
+    }
+
+    private struct OwnedWorkspace {
+        var container: URL
+        var sessionRoot: URL
+    }
+
+    private static func ownedWorkspaceContainers(
+        in workspacesRoot: URL,
+        sessionsRoot: URL
+    ) -> [OwnedWorkspace] {
+        guard let projects = try? FileManager.default.contentsOfDirectory(
+            at: workspacesRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var result: [OwnedWorkspace] = []
+        for project in projects {
+            guard let projectValues = try? project.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            ),
+            projectValues.isDirectory == true,
+            projectValues.isSymbolicLink != true,
+            project.deletingLastPathComponent().standardizedFileURL
+                == workspacesRoot.standardizedFileURL,
+            let sessions = try? FileManager.default.contentsOfDirectory(
+                at: project,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for container in sessions {
+                guard let values = try? container.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+                ),
+                values.isDirectory == true,
+                values.isSymbolicLink != true,
+                container.deletingLastPathComponent().standardizedFileURL
+                    == project.standardizedFileURL,
+                let marker = ownedWorkspaceMarker(in: container) else {
+                    continue
+                }
+                let sessionRoot = sessionsRoot.appendingPathComponent(
+                    marker.sessionID.uuidString,
+                    isDirectory: true
+                )
+                guard ownsSession(sessionRoot) else { continue }
+                result.append(OwnedWorkspace(
+                    container: container,
+                    sessionRoot: sessionRoot
+                ))
+            }
+        }
+        return result
+    }
+
+    private static func ownedWorkspaceMarker(
+        in container: URL
+    ) -> IsolationWorkspaceMarker? {
+        let markerURL = container.appendingPathComponent(IsolationWorkspaceMarker.fileName)
+        guard isRegularFile(markerURL),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: markerURL.path),
+              let size = (attributes[.size] as? NSNumber)?.intValue,
+              size > 0,
+              size < 64 * 1024,
+              let data = try? Data(contentsOf: markerURL),
+              let marker = try? IsolationWorkspaceCoding.decodeMarker(data),
+              marker.version == 1 else {
+            return nil
+        }
+        return marker
     }
 
     private static func unownedSessionRootCount(in sessionsRoot: URL) -> Int? {

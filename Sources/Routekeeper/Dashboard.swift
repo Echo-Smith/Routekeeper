@@ -60,9 +60,11 @@ struct Dashboard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
     @State private var page: GuardPage = .home
+    @State private var pageVisitID = UUID()
+    @State private var pageScrollTarget: DashboardScrollTarget = .top
     @State private var detailPath: [String] = []
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var networkScrollTarget: NetworkProtectionAnchor?
+    @ObservedObject private var scrollCoordinator = DashboardScrollCoordinator.shared
     @ObservedObject private var pageOverflow = RoutekeeperToolbarCoordinator.shared
     private func text(_ zh: String, _ en: String) -> String { L10n.resolvedEnglish ? en : zh }
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
@@ -120,26 +122,37 @@ struct Dashboard: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 228, max: 300)
         } detail: {
             NavigationStack(path: $detailPath) {
-                ScrollViewReader { proxy in
+                ScrollViewReader { scrollProxy in
                     ScrollView {
-                        pageBody
-                            .padding(.horizontal, pageHorizontalPadding)
-                            .padding(.top, 22)
-                            .padding(.bottom, 26)
-                            .frame(maxWidth: 1040, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .center)
+                        VStack(spacing: 0) {
+                            Color.clear
+                                .frame(height: 0)
+                                .id(DashboardScrollID.top)
+
+                            pageBody
+                                .padding(.horizontal, pageHorizontalPadding)
+                                .padding(.top, 22)
+                                .padding(.bottom, 26)
+                                .frame(maxWidth: 1040, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
                     }
                     .id(navigationIdentity)
-                    .onChange(of: networkScrollTarget) { _, target in
-                        guard let target else { return }
-                        DispatchQueue.main.async {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                                proxy.scrollTo(target, anchor: .top)
-                            }
-                            if networkScrollTarget == target {
-                                networkScrollTarget = nil
-                            }
-                        }
+                    .defaultScrollAnchor(.top)
+                    .task(id: navigationIdentity) {
+                        let target = DashboardScrollID(pageScrollTarget)
+                        await Task.yield()
+                        scrollProxy.scrollTo(target, anchor: .top)
+                        try? await Task.sleep(for: .milliseconds(240))
+                        guard !Task.isCancelled else { return }
+                        scrollProxy.scrollTo(target, anchor: .top)
+                    }
+                    .onChange(of: scrollCoordinator.request) { _, request in
+                        guard let request else { return }
+                        scrollProxy.scrollTo(
+                            DashboardScrollID(request.target),
+                            anchor: .top
+                        )
                     }
                     .navigationDestination(for: String.self) { _ in
                         AppSettingsView(store: store)
@@ -148,17 +161,7 @@ struct Dashboard: View {
                     }
                     .navigationTitle(page.navigationTitle)
                     .navigationSubtitle(currentSectionTitle ?? "")
-                    .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
-                            if !pageOverflow.entries.isEmpty {
-                                PageOverflowMenu(
-                                    label: pageOverflow.label,
-                                    entries: pageOverflow.entries
-                                )
-                                .frame(width: 44, height: 44)
-                            }
-                        }
-                    }
+                    .background(PageOverflowToolbarHost())
                 }
             }
         }
@@ -166,6 +169,7 @@ struct Dashboard: View {
         .id(store.languageRevision)
         .preferredColorScheme(appearanceOverride)
         .onAppear {
+            enterPage(scrollingTo: .top)
             applyNavigationRequest()
             if disclaimerAcceptedVersion != DisclaimerDocument.currentVersion {
                 showDisclaimerGate = true
@@ -327,7 +331,12 @@ struct Dashboard: View {
             set: { newValue in
                 guard let newValue else { return }
                 if newValue == page {
+                    let wasShowingSettings = !detailPath.isEmpty
                     detailPath.removeAll()
+                    if wasShowingSettings {
+                        pageVisitID = UUID()
+                        enterPage(scrollingTo: .top)
+                    }
                 } else {
                     selectPage(newValue)
                 }
@@ -343,15 +352,22 @@ struct Dashboard: View {
     }
 
     private var navigationIdentity: String {
-        page.rawValue
+        "\(page.rawValue)-\(pageVisitID.uuidString)"
     }
 
     private func selectPage(_ newPage: GuardPage) {
+        selectPage(newPage, scrollingTo: .top)
+    }
+
+    private func selectPage(
+        _ newPage: GuardPage,
+        scrollingTo target: DashboardScrollTarget
+    ) {
         detailPath.removeAll()
+        pageVisitID = UUID()
         let resolvedPage: GuardPage
         switch newPage {
         case .inspection, .networkProtection:
-            networkScrollTarget = .status
             resolvedPage = .networkProtection
         default:
             resolvedPage = newPage
@@ -359,11 +375,15 @@ struct Dashboard: View {
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             page = resolvedPage
         }
+        enterPage(scrollingTo: target)
     }
 
     private func openNetworkProtection(at anchor: NetworkProtectionAnchor) {
-        selectPage(.networkProtection)
-        networkScrollTarget = anchor
+        selectPage(.networkProtection, scrollingTo: .section(anchor))
+    }
+
+    private func enterPage(scrollingTo target: DashboardScrollTarget) {
+        pageScrollTarget = target
     }
 
     @ViewBuilder var pageBody: some View {
@@ -392,7 +412,7 @@ struct Dashboard: View {
 
     private var networkProtectionPage: some View {
         NetworkProtectionPage(store: store) { anchor in
-            networkScrollTarget = anchor
+            scrollCoordinator.scroll(to: .section(anchor))
         }
     }
 
@@ -465,13 +485,19 @@ struct Dashboard: View {
     }
 
     private var homeStatusOverview: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let completeness = homeCompleteness
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: store.symbol)
                     .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(statusColor)
                     .frame(width: 32, height: 32)
                     .accessibilityHidden(true)
+
+                if let score = completeness.score {
+                    homeCompletenessScoreBadge(score, assessment: completeness)
+                }
+
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(homeHealthTitle)
@@ -484,7 +510,12 @@ struct Dashboard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                homePrimaryActionButton
+                HStack(spacing: 8) {
+                    if completeness.score != nil {
+                        homeCompletenessHelpButton
+                    }
+                    homePrimaryActionButton
+                }
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
             }
@@ -513,22 +544,11 @@ struct Dashboard: View {
                 .buttonStyle(.borderless)
             }
 
-            AppHairline()
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    homeCompletenessTimeline
+            if store.snapshot != nil {
+                AppHairline()
+                HStack {
                     homeLastCheckText
                     Spacer(minLength: 0)
-                    homeCompletenessHelpButton
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 12) {
-                        homeCompletenessTimeline
-                        Spacer(minLength: 0)
-                        homeCompletenessHelpButton
-                    }
-                    homeLastCheckText
                 }
             }
         }
@@ -574,54 +594,31 @@ struct Dashboard: View {
         )
     }
 
-    private var homeCompletenessTimeline: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { _ in
-            homeCompletenessSummary
+    private func homeCompletenessScoreBadge(
+        _ score: Int,
+        assessment: ProtectionCompletenessAssessment
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Text("\(score)")
+                .routekeeperFont(.title3, weight: .bold, monospacedDigit: true)
+            Text(text("分", "pts"))
+                .routekeeperFont(.caption2, weight: .medium)
         }
-    }
-
-    private var homeCompletenessSummary: some View {
-        let assessment = homeCompleteness
-        return HStack(spacing: 7) {
-            Image(systemName: homeCompletenessSymbol(assessment))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(homeCompletenessColor(assessment))
-                .accessibilityHidden(true)
-            Text(text("保护完整度", "Protection completeness"))
-                .routekeeperFont(.caption)
-                .foregroundStyle(.secondary)
-            if let score = assessment.score {
-                Text("\(score)")
-                    .routekeeperFont(.callout, weight: .semibold, monospacedDigit: true)
-                    .foregroundStyle(homeCompletenessColor(assessment))
-                Text(homeCompletenessBandTitle(assessment.band))
-                    .routekeeperFont(.caption2, weight: .medium)
-                    .foregroundStyle(.secondary)
-                Text("· \(homeEvidenceTitle(assessment.evidenceQuality))")
-                    .routekeeperFont(.caption2)
-                    .foregroundStyle(.tertiary)
-            } else {
-                Text(homeCompletenessStateTitle(assessment.state))
-                    .routekeeperFont(.caption, weight: .medium)
-                    .foregroundStyle(homeCompletenessColor(assessment))
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            assessment.score.map {
-                text("保护完整度 \($0) 分，\(homeCompletenessBandTitle(assessment.band))",
-                     "Protection completeness \($0), \(homeCompletenessBandTitle(assessment.band))")
-            } ?? text("保护完整度，\(homeCompletenessStateTitle(assessment.state))",
-                      "Protection completeness, \(homeCompletenessStateTitle(assessment.state))")
+        .foregroundStyle(homeCompletenessColor(assessment))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            homeCompletenessColor(assessment).opacity(0.09),
+            in: Capsule()
         )
-    }
-
-    private func homeCompletenessSymbol(_ assessment: ProtectionCompletenessAssessment) -> String {
-        switch assessment.evidenceQuality {
-        case .direct: return "point.3.connected.trianglepath.dotted"
-        case .crossChecked: return "checkmark.shield"
-        case .inferred, .insufficient: return "dot.radiowaves.left.and.right"
-        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            text(
+                "保护完整度 \(score) 分，\(homeCompletenessBandTitle(assessment.band))",
+                "Protection completeness \(score), \(homeCompletenessBandTitle(assessment.band))"
+            )
+        )
     }
 
     private func homeCompletenessColor(_ assessment: ProtectionCompletenessAssessment) -> Color {
@@ -644,35 +641,30 @@ struct Dashboard: View {
         }
     }
 
-    private func homeCompletenessStateTitle(_ state: ProtectionCompletenessState) -> String {
-        switch state {
-        case .notRun: return text("等待体检", "Waiting for a check")
-        case .incomplete: return text("暂不可评分", "Not enough evidence")
-        case .needsReview: return text("待复核", "Review needed")
-        case .scored: return ""
-        }
-    }
-
-    private func homeEvidenceTitle(_ quality: ProtectionEvidenceQuality) -> String {
-        switch quality {
-        case .direct: return text("实时连接证据", "Live connection evidence")
-        case .crossChecked: return text("交叉验证", "Cross-checked")
-        case .inferred: return text("本机推断", "Inferred locally")
-        case .insufficient: return text("证据不足", "Insufficient evidence")
-        }
-    }
-
     private var homePrimaryActionButton: some View {
         Button(action: homePrimaryAction) {
             Label(homePrimaryTitle, systemImage: homePrimarySymbol)
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
         }
-        .routekeeperProminentButton()
+        .routekeeperProminentButton(homePrimaryActionTone)
         .controlSize(.regular)
         .fixedSize(horizontal: true, vertical: false)
         .disabled(store.checking)
         .accessibilityIdentifier("home-primary")
+    }
+
+    private var homePrimaryActionTone: AppActionTone {
+        if store.policy.phase == .incident
+            || homeSnapshotHasFailure
+            || store.egressAudit.report?.assessment.level == .attention {
+            return .danger
+        }
+        if homeNeedsReview
+            || store.egressAudit.report?.assessment.level == .insufficient {
+            return .warning
+        }
+        return .primary
     }
 
     private var homeHealthTitle: String {
@@ -825,11 +817,7 @@ struct Dashboard: View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 AppSectionHeading(
-                    title: text("代理网关", "Proxy gateway"),
-                    subtitle: text(
-                        "检查代理可用、节点断开失败关闭，以及代理退出后不会回落直连。",
-                        "Check reachability and fail-closed behavior without a node or proxy client."
-                    )
+                    title: text("代理网关", "Proxy gateway")
                 )
                 Spacer(minLength: 8)
                 Button(text("打开检查", "Open check")) {
@@ -867,7 +855,7 @@ struct Dashboard: View {
                 )
                 Spacer(minLength: 8)
                 Button {
-                    openNetworkProtection(at: .protectionMode)
+                    openNetworkProtection(at: .scope)
                 } label: {
                     Text(text("管理保护范围", "Manage protection"))
                 }
@@ -949,7 +937,7 @@ struct Dashboard: View {
             if running > 0 {
                 return (text("\(running) 个进程", "\(running) running"), appStatusSuccess)
             }
-            return (text("已启用 · 等待启动", "On · waiting to launch"), appStatusWarning)
+            return (text("已启用 · 等待启动", "On · waiting to launch"), .secondary)
         }()
 
         HStack(spacing: 12) {
@@ -957,14 +945,8 @@ struct Dashboard: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(status.color)
                 .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kind == .desktop ? "Claude Desktop" : "Claude Code")
-                    .routekeeperFont(.callout, weight: .medium)
-                Text(enabled
-                     ? text("已纳入监控", "Included in monitoring")
-                     : text("未纳入监控", "Excluded from monitoring"))
-                    .routekeeperFont(.caption2).foregroundStyle(.secondary)
-            }
+            Text(kind == .desktop ? "Claude" : "Claude Code")
+                .routekeeperFont(.callout, weight: .medium)
             Spacer()
             Text(status.title)
                 .routekeeperFont(.caption, weight: .medium)
@@ -972,7 +954,7 @@ struct Dashboard: View {
         }
         .padding(.vertical, 5)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(status.title), \(kind == .desktop ? "Claude Desktop" : "Claude Code")")
+        .accessibilityLabel("\(status.title), \(kind == .desktop ? "Claude" : "Claude Code")")
     }
 
     private var homeEgressSection: some View {
@@ -1214,7 +1196,7 @@ struct Dashboard: View {
     var homePrimarySymbol: String {
         if store.monitoring { return "stop.fill" }
         if store.snapshot == nil { return "waveform.path.ecg.rectangle" }
-        if homeNeedsReview { return "arrow.up.right" }
+        if homeNeedsReview { return "exclamationmark.circle" }
         if store.snapshot?.ready == true && canStartMonitoring { return "shield.fill" }
         return "waveform.path.ecg.rectangle"
     }
@@ -1353,8 +1335,8 @@ struct Dashboard: View {
             }
         } message: {
             Text(text(
-                "本地信息包括 Routekeeper 设置、运行记录、报告、登录凭证、沙箱副本和系统过滤配置。它与普通缓存不同，无法从废纸篓恢复。",
-                "Local data includes Routekeeper settings, run history, reports, the saved credential, sandbox copies and system-filter configuration. Unlike regular caches, it cannot be restored from Trash."
+                "本地信息包括 Routekeeper 设置、运行记录、报告、登录凭证和沙箱副本，无法从废纸篓恢复。",
+                "Local data includes Routekeeper settings, run history, reports, the saved credential and sandbox copies. It cannot be restored from Trash."
             ))
         }
         .onChange(of: store.cleanupPlanRevision) {
@@ -1474,8 +1456,8 @@ struct Dashboard: View {
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 Label(
-                    text("Claude Desktop 与 Claude Code 的可再生成缓存、临时文件和运行日志",
-                         "Regenerable caches, temporary files and runtime logs from Claude Desktop and Claude Code"),
+                    text("Claude 与 Claude Code 的可再生成缓存、临时文件和运行日志",
+                         "Regenerable caches, temporary files and runtime logs from Claude and Claude Code"),
                     systemImage: "macwindow"
                 )
                 Label(
@@ -1498,8 +1480,8 @@ struct Dashboard: View {
     private var cleanupPolicyCard: some View {
         Label(
             text(
-                "普通清理只处理白名单内的可再生成缓存、临时文件和日志；不会处理对话、项目、Cookie、账户或设备标识。",
-                "Regular cleanup only handles allowlisted regenerable caches, temporary files and logs. Conversations, projects, cookies, accounts and device identifiers are excluded."
+                "仅处理白名单内的可再生成缓存、临时文件和日志。详细边界见帮助。",
+                "Only allowlisted regenerable caches, temporary files and logs are handled. See Help for the full boundary."
             ),
             systemImage: "checkmark.shield"
         )
@@ -1553,8 +1535,8 @@ struct Dashboard: View {
                         .routekeeperFont(.headline)
                         .accessibilityAddTraits(.isHeader)
                     Text(text(
-                        "按来源分组；安全缓存默认选中，历史沙箱默认关闭，可展开逐项调整。",
-                        "Grouped by source; safe caches are selected by default, past sandboxes are off by default, and every group can be adjusted."
+                        "安全缓存默认选中；工作副本默认不选。",
+                        "Safe caches are selected by default; workspaces are not selected."
                     ))
                     .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
@@ -1596,7 +1578,7 @@ struct Dashboard: View {
     private var cleanupLocalDataCard: some View {
         GuardCard(
             title: text("Routekeeper 本地信息", "Routekeeper local data"),
-            subtitle: text("默认不选择。", "Off by default.")
+            subtitle: text("默认不选择；清除后不可恢复。", "Off by default; this cannot be undone.")
         ) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "externaldrive.badge.exclamationmark")
@@ -1612,13 +1594,6 @@ struct Dashboard: View {
                     Text(text("清除设置、记录、凭证与沙箱副本",
                               "Clear settings, history, credentials and sandbox copies"))
                         .routekeeperFont(.callout, weight: .medium)
-                    Text(text(
-                        "不可恢复，也不会进入废纸篓。",
-                        "This cannot be undone or restored from Trash."
-                    ))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 12)
@@ -1839,12 +1814,13 @@ struct Dashboard: View {
 
     private func cleanupScopeTitle(_ scope: CleanupScope) -> String {
         switch scope {
-        case .hostDesktop: return text("宿主 Claude Desktop", "Host Claude Desktop")
+        case .hostDesktop: return text("宿主 Claude", "Host Claude")
         case .hostCode: return text("宿主 Claude Code", "Host Claude Code")
         case .hostScience: return text("宿主 Claude Science", "Host Claude Science")
         case .currentSession: return text("当前 Routekeeper 沙箱", "Current Routekeeper sandbox")
         case .pastSession: return text("历史 Routekeeper 沙箱", "Past Routekeeper sandboxes")
         case .persistentProfile: return text("持久登录沙箱数据", "Persistent sign-in sandbox profile")
+        case .workspace: return text("用户项目副本", "User project workspaces")
         }
     }
 
@@ -1856,6 +1832,7 @@ struct Dashboard: View {
         case .currentSession: return "shippingbox.fill"
         case .pastSession: return "archivebox"
         case .persistentProfile: return "person.crop.circle.badge.checkmark"
+        case .workspace: return "folder.badge.gearshape"
         }
     }
 

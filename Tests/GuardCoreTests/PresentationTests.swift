@@ -188,7 +188,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertFalse(store.events[1].isAttention)
     }
 
-    @MainActor func testDesktopInstalledUsesSignatureVerifiedDiscoveryBeforeAnySnapshot() throws {
+    @MainActor func testDesktopInstalledUsesSignatureVerifiedDiscoveryBeforeAnySnapshot() async throws {
         guard let installation = ClaudeDesktopDiscovery.locate() else {
             throw XCTSkip("No signature-verified official Claude Desktop app is installed.")
         }
@@ -197,6 +197,7 @@ final class PresentationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = GuardStore(defaults: defaults, watchNetwork: false, notificationsEnabled: false)
         XCTAssertNil(store.snapshot)
+        await store.loadDesktopInstallationIfNeeded()
         XCTAssertTrue(store.desktopInstalled)
         XCTAssertEqual(store.desktopInstallation?.appURL, installation.appURL)
     }
@@ -339,7 +340,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertFalse(session.persistedClaudeProfileAvailable)
     }
 
-    @MainActor func testManuallySelectedClaudeCodeCommandPersistsAcrossSessions() throws {
+    @MainActor func testManuallySelectedClaudeCodeCommandPersistsAcrossSessions() async throws {
         let suite = "guard-claude-command-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         let temp = FileManager.default.temporaryDirectory
@@ -361,6 +362,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(session.claudeCodeInstallation?.source, .manuallySelected)
 
         let restored = SandboxSession(preferences: defaults)
+        await restored.loadInstalledApplicationsIfNeeded()
         XCTAssertEqual(restored.claudeCodeInstallation?.executableURL, command.standardizedFileURL)
         XCTAssertEqual(restored.claudeCodeInstallation?.source, .manuallySelected)
     }
@@ -405,7 +407,11 @@ final class PresentationTests: XCTestCase {
 
         let gateway = GatewayVerificationController(defaults: defaults, invalidateLoadedEvidence: false)
         let egress = EgressAuditController(defaults: defaults)
-        let sandbox = SandboxCoordinator(preferences: defaults, sessionsRoot: sessionsRoot)
+        let sandbox = SandboxCoordinator(
+            preferences: defaults,
+            sessionsRoot: sessionsRoot,
+            profilesRoot: temp.appendingPathComponent("Profiles", isDirectory: true)
+        )
         let store = GuardStore(
             defaults: defaults,
             watchNetwork: false,

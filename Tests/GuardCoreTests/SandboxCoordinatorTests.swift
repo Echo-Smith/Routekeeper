@@ -108,6 +108,112 @@ final class SandboxCoordinatorTests: XCTestCase {
         XCTAssertTrue(persisted.persistClaudeLogin)
     }
 
+    func testSharedLocaleEditsReachBothSessionLaunchConfigurationsAndPersist() throws {
+        let fixture = makeFixture()
+        defer { fixture.cleanUp() }
+        let coordinator = SandboxCoordinator(
+            preferences: fixture.defaults,
+            sessionsRoot: fixture.sessions,
+            profilesRoot: fixture.profiles,
+            installedTargets: [.claudeCode, .claudeDesktop]
+        )
+
+        coordinator.updateTimezoneIdentifier("America/Los_Angeles")
+        coordinator.updateLanguageIdentifier("zh-Hans")
+
+        for target in [IsolationApplicationTarget.claudeCode, .claudeDesktop] {
+            let configuration = coordinator.sharedConfiguration.configuration(for: target)
+            XCTAssertEqual(configuration.timezoneIdentifier, "America/Los_Angeles")
+            XCTAssertEqual(configuration.languageIdentifier, "zh-Hans")
+            XCTAssertEqual(coordinator.session(for: target).configuration, configuration)
+            let environment = SandboxSession.baseEnvironment(
+                configuration: configuration,
+                paths: IsolationResolvedPaths(
+                    originalProject: nil,
+                    exchange: fixture.exchange,
+                    layout: IsolationSessionLayout(root: fixture.sessions)
+                ),
+                relayEnvironment: [:]
+            )
+            XCTAssertEqual(environment["TZ"], "America/Los_Angeles")
+            XCTAssertEqual(environment["AppleLocale"], "zh_CN")
+        }
+        let data = try XCTUnwrap(fixture.defaults.data(forKey: sharedConfigurationKey))
+        let restored = try JSONDecoder().decode(SandboxSharedConfiguration.self, from: data)
+        XCTAssertEqual(restored, coordinator.sharedConfiguration)
+        XCTAssertFalse(restored.usesEgressRegionalDefaults)
+    }
+
+    func testEgressDefaultsApplyOnlyWhenFollowingAndUpdateBothSessions() {
+        let fixture = makeFixture()
+        defer { fixture.cleanUp() }
+        let coordinator = SandboxCoordinator(
+            preferences: fixture.defaults,
+            sessionsRoot: fixture.sessions,
+            profilesRoot: fixture.profiles,
+            installedTargets: [.claudeCode, .claudeDesktop]
+        )
+        let report = EgressAuditReport(
+            snapshotTime: Date(),
+            proxyConfigured: true,
+            primaryIP: "203.0.113.1",
+            families: [],
+            services: [],
+            intelligence: [IPIntelligence(
+                ip: "203.0.113.1",
+                sources: ["test"],
+                countryCode: "JP",
+                timezone: "Asia/Tokyo"
+            )],
+            intelligenceStatus: .available,
+            assessment: EgressAssessment(level: .clear, findings: [])
+        )
+
+        coordinator.applyEgressRegionalDefaults(from: report)
+
+        XCTAssertEqual(coordinator.codeSession.configuration.timezoneIdentifier, "Asia/Tokyo")
+        XCTAssertEqual(coordinator.desktopSession.configuration.languageIdentifier, "ja-JP")
+        coordinator.updateLanguageIdentifier("en-US")
+        coordinator.applyEgressRegionalDefaults(from: report)
+        XCTAssertEqual(coordinator.sharedConfiguration.languageIdentifier, "en-US")
+    }
+
+    func testRegionalRepairReplacesInvalidValuesWithValidEgressValues() {
+        let fixture = makeFixture()
+        defer { fixture.cleanUp() }
+        let coordinator = SandboxCoordinator(
+            preferences: fixture.defaults,
+            sessionsRoot: fixture.sessions,
+            profilesRoot: fixture.profiles,
+            installedTargets: [.claudeCode, .claudeDesktop]
+        )
+        var invalid = coordinator.sharedConfiguration
+        invalid.timezoneIdentifier = ""
+        invalid.languageIdentifier = ""
+        coordinator.sharedConfiguration = invalid
+        let report = EgressAuditReport(
+            snapshotTime: Date(),
+            proxyConfigured: true,
+            primaryIP: "198.51.100.1",
+            families: [],
+            services: [],
+            intelligence: [IPIntelligence(
+                ip: "198.51.100.1",
+                sources: ["test"],
+                countryCode: "DE",
+                timezone: "Europe/Berlin"
+            )],
+            intelligenceStatus: .available,
+            assessment: EgressAssessment(level: .clear, findings: [])
+        )
+
+        XCTAssertTrue(coordinator.repairRegionalSettings(from: report))
+        XCTAssertEqual(coordinator.sharedConfiguration.timezoneIdentifier, "Europe/Berlin")
+        XCTAssertEqual(coordinator.sharedConfiguration.languageIdentifier, "de-DE")
+        XCTAssertTrue(coordinator.sharedConfiguration.usesEgressRegionalDefaults)
+        XCTAssertEqual(coordinator.desktopSession.configuration.timezoneIdentifier, "Europe/Berlin")
+    }
+
     func testSharedConfigurationChangeClearsStaleWebLaunchValidationFailure() {
         let fixture = makeFixture()
         defer { fixture.cleanUp() }
@@ -138,7 +244,7 @@ final class SandboxCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.webBrowser.phase, .stopped)
         XCTAssertEqual(
             coordinator.webBrowser.message,
-            "共享设置已更新，可以重新打开 Claude 网页版。"
+            "共享设置已更新，可以重新打开 Chrome。"
         )
     }
 
@@ -169,7 +275,48 @@ final class SandboxCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.webBrowser.phase, .stopped)
         XCTAssertEqual(
             coordinator.webBrowser.message,
-            "共享设置已更新，可以重新打开 Claude 网页版。"
+            "共享设置已更新，可以重新打开 Chrome。"
+        )
+    }
+
+    func testValidSharedConfigurationReplacesStaleInvalidWebMessageAfterFailure() {
+        let fixture = makeFixture()
+        defer { fixture.cleanUp() }
+        let coordinator = SandboxCoordinator(
+            preferences: fixture.defaults,
+            sessionsRoot: fixture.sessions,
+            profilesRoot: fixture.profiles,
+            installedTargets: [.claudeCode, .claudeDesktop]
+        )
+        coordinator.webBrowser.installation = ClaudeWebBrowserInstallation(
+            appURL: URL(fileURLWithPath: "/Applications/Google Chrome.app"),
+            executableURL: URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            bundleIdentifier: "com.google.Chrome",
+            displayName: "Google Chrome",
+            signingIdentifier: "com.google.Chrome",
+            teamIdentifier: "EQHXZ8M8AV",
+            shortVersion: "156.0",
+            bundleVersion: "8078.48"
+        )
+        coordinator.webBrowser.phase = .failed
+        var invalid = coordinator.sharedConfiguration
+        invalid.timezoneIdentifier = "Mars/Olympus"
+        coordinator.sharedConfiguration = invalid
+        XCTAssertEqual(coordinator.webBrowser.phase, .stopped)
+        XCTAssertEqual(
+            coordinator.webBrowser.message,
+            "会话时区“Mars/Olympus”无效，请修正红色配置后再打开 Chrome。"
+        )
+
+        var valid = coordinator.sharedConfiguration
+        valid.timezoneIdentifier = "Asia/Tokyo"
+        valid.languageIdentifier = "ja-JP"
+        coordinator.sharedConfiguration = valid
+
+        XCTAssertEqual(coordinator.webBrowser.phase, .stopped)
+        XCTAssertEqual(
+            coordinator.webBrowser.message,
+            "共享设置已更新，可以重新打开 Chrome。"
         )
     }
 

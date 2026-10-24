@@ -192,6 +192,29 @@ final class GuardCoreTests: XCTestCase {
             .write(to: control.appendingPathComponent("sandbox.started"))
         XCTAssertTrue(CacheCleaner.sessionIsRunning(root))
     }
+    func testCommandDrainsOutputLargerThanPipeBuffer() {
+        let result = Command.run(
+            "/bin/sh",
+            ["-c", "/usr/bin/yes routekeeper-output | /usr/bin/head -c 262144"],
+            timeout: 2
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertGreaterThan(result.output.utf8.count, 60_000)
+        XCTAssertTrue(result.output.hasPrefix("routekeeper-output"))
+    }
+    func testCommandCanRaiseOutputLimitForProcessInventory() {
+        let result = Command.run(
+            "/bin/sh",
+            ["-c", "/usr/bin/yes routekeeper-process | /usr/bin/head -c 262144"],
+            timeout: 2,
+            outputLimit: 1_000_000
+        )
+
+        XCTAssertEqual(result.status, 0)
+        XCTAssertGreaterThan(result.output.utf8.count, 200_000)
+        XCTAssertTrue(result.output.hasPrefix("routekeeper-process"))
+    }
     func testTunnelRequiresTwoMatchingRoutes() {
         XCTAssertEqual(RouteEvidence.interface(from: "destination: default\n  interface: utun4\n flags: UP"), "utun4")
         XCTAssertEqual(RouteEvidence.sameTunnel(["utun4", "utun4"]), "utun4")

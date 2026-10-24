@@ -1153,6 +1153,39 @@ struct EgressAuditPage: View {
 }
 
 extension EgressFinding {
+    var conciseDescription: String {
+        let en = L10n.resolvedEnglish
+        switch self {
+        case .exitMismatch: return en ? "Exit mismatch" : "出口不一致"
+        case .incompleteExitEvidence: return en ? "Incomplete exit evidence" : "出口证据不完整"
+        case .noObservedExit: return en ? "No public exit observed" : "未观察到公网出口"
+        case .serviceUnreachable: return en ? "Claude service unreachable" : "Claude 服务不可达"
+        case .countryMismatch: return en ? "Region mismatch" : "地区不一致"
+        case .asnMismatch: return en ? "Network/ASN mismatch" : "网络或 ASN 不一致"
+        case .datacenterNetwork: return en ? "Datacenter exit" : "数据中心出口"
+        case .proxySignal: return en ? "Proxy signal" : "代理网络标记"
+        case .vpnSignal: return en ? "VPN signal" : "VPN 网络标记"
+        case .torSignal: return en ? "Tor signal" : "Tor 网络标记"
+        case .abuseSignal: return en ? "Abuse history" : "存在滥用记录"
+        case .crawlerSignal: return en ? "Crawler signal" : "爬虫流量标记"
+        case .mobileNetwork: return en ? "Mobile network" : "移动网络"
+        case .bogonAddress: return en ? "Invalid public IP" : "公网地址无效"
+        case .riskIntelligenceUnavailable: return en ? "Risk data incomplete" : "风险情报不完整"
+        case .thirdPartyDisabled: return en ? "Risk lookup disabled" : "风险情报未启用"
+        case .ipv6DirectExposure: return en ? "Possible IPv6 bypass" : "IPv6 可能绕过代理"
+        case .ipv6TunnelExitMismatch: return en ? "IPv6 exit mismatch" : "IPv6 出口不一致"
+        case .ipv6ProxyUnconfirmed: return en ? "IPv6 proxy unconfirmed" : "IPv6 代理归属未确认"
+        case .ipv6PathUnknown: return en ? "IPv6 path unknown" : "IPv6 路径未知"
+        case .dnsPathLeakSuspected: return en ? "Possible DNS leak" : "DNS 可能泄漏"
+        case .dnsPathUnverified: return en ? "DNS path unverified" : "DNS 路径未确认"
+        case .udpExitMismatch: return en ? "UDP exit mismatch" : "UDP 出口不一致"
+        case .udpExitUnverified: return en ? "UDP path unverified" : "UDP 路径未确认"
+        case .dualStackFallbackSuspected: return en ? "Possible IPv6 fallback" : "可能存在 IPv6 回退"
+        case .timeZoneMismatch: return en ? "Time zone mismatch" : "时区不一致"
+        case .timeZoneUnverified: return en ? "Time zone unverified" : "时区未确认"
+        }
+    }
+
     var localizedDescription: String {
         let en = L10n.resolvedEnglish
         switch self {

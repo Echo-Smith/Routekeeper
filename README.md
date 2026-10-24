@@ -1,230 +1,417 @@
 <p align="center">
-  <img src="docs/assets/routekeeper-icon.png" width="160" height="160" alt="Routekeeper icon">
+  <img src="docs/assets/routekeeper-icon.png" width="144" height="144" alt="Routekeeper icon">
 </p>
 
 <h1 align="center">Routekeeper</h1>
+
+<p align="center"><strong>See the exit. Hold the boundary. Isolate the work.</strong></p>
+
+<p align="center">
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple">
+  <img alt="Swift 5.10" src="https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white">
+  <img alt="Noncommercial license" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-2F6FED">
+</p>
 
 <p align="center">
   <a href="README.md">English</a> |
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-Routekeeper is a native macOS network inspection and monitoring utility. It
-checks whether observed IPv4 and IPv6 traffic follows the expected route,
-helps compare expected and observed proxy exits, and can monitor selected
-applications for network changes.
+<p align="center">
+  <a href="docs/assets/routekeeper-demo.mp4">
+    <img src="docs/assets/routekeeper-demo.gif" width="900" alt="Routekeeper workflow: overview, network protection and native title-bar menu">
+  </a>
+</p>
 
-Version **0.3.12** (build 22) is a private development preview for macOS 14 or
-later. The app is ad-hoc signed and the local DMG is not notarized.
+<p align="center"><sub>Anonymized interface and redacted network data. Select the preview to view the MP4.</sub></p>
 
-## Download and install
+Routekeeper is a native macOS network inspection, egress verification and
+experimental execution-isolation utility. It goes beyond the fact that a proxy
+client says it is connected and answers the questions that matter:
 
-[Download Routekeeper 0.3.12](https://github.com/Echo-Smith/Routekeeper/releases/tag/v0.3.12)
+1. Where does the traffic actually leave from?
+2. Is that evidence still valid, and will traffic fail closed if the proxy fails?
+3. Can sensitive work run inside a separate file, network and sign-in boundary?
 
-1. Open the DMG.
-2. Drag `Routekeeper.app` into the Applications folder.
-3. Launch Routekeeper from Applications.
+Routekeeper is built for personal study, research and technical exchange. It
+focuses on observability, reviewability and fail-closed behavior. It does not
+promise anonymity, zero leakage or a way around any service restriction.
 
-The current package is ad-hoc signed and not notarized by Apple. If macOS blocks
-the first launch, allow it from System Settings → Privacy & Security. The
-current artifact supports Apple Silicon only.
+> [!IMPORTANT]
+> Routekeeper is licensed under the **PolyForm Noncommercial License 1.0.0**.
+> Personal study, research, experiments and other noncommercial use are
+> permitted. Commercial use requires separate authorization. This is a
+> source-available noncommercial project, not an OSI-approved open-source
+> project. See [LICENSE](LICENSE) and [Terms](TERMS.md).
 
-## Features
+> [!NOTE]
+> The current source version is **0.3.12 (build 24)**. The repository is
+> source-first. Local builds are ad-hoc signed by default; a public binary still
+> needs Developer ID signing, notarization and release-specific validation.
 
-- Menu bar monitoring that keeps running when the main window is closed and
-  restores the Dock icon when the panel is reopened.
-- IPv4 and IPv6 route evidence, system and explicit-proxy exit comparison,
-  DNS resolver checks, and bounded UDP/STUN checks.
-- Network service reachability checks for the endpoints configured by the
-  application.
-- An explainable Protection completeness score in Overview. It summarizes only
-  applicable evidence, never treats disabled optional features as failures, and
-  never blocks Claude, monitoring, sign-in or the experimental sandbox.
-- Live Claude process evidence uses TCP connection counts plus redacted proxy,
-  custom API, locale and timezone variable metadata. Raw environment values,
-  arguments and credentials are not stored in reports.
-- Sleep, wake, path, DNS, proxy, and address-change invalidation. Unknown
-  evidence never counts as a pass.
-- A staged proxy-gateway check for the current path, overseas-node failure,
-  proxy-client exit, and restored connectivity. Evidence expires after network,
-  proxy or settings changes, sleep/wake, a Routekeeper restart, or 15 minutes.
-  Selected gateway protection blocks monitoring and desktop launch until fresh
-  evidence passes.
-- Optional selected-process network filtering source using a Network
-  Extension. The current ad-hoc build cannot activate the required system
-  extension entitlement.
-- Optional, time-limited packet-header capture after explicit administrator
-  approval.
-- An optional experimental process sandbox for Claude Code and a signature-
-  verified official Claude Desktop app. It uses a reviewed workspace copy, an
-  isolated HOME, a selected session timezone, local HTTP CONNECT or SOCKS5
-  upstreams, and process-level fail-closed networking. A detectable system
-  proxy is aligned automatically, and the Claude path and observed exit are
-  checked. The original project is never changed automatically.
-- Sandbox is a top-level workspace rather than a hidden Protection submenu.
-  Enabling it turns Network check into the sandbox's own exit, relay, preflight
-  and session checks. Routekeeper can detect and save the matching exit directly
-  in that flow instead of requiring a separate ordinary-check detour.
-- Network notifications pass through a roughly 1.6-second stability window and
-  fingerprint recheck. The relay closes only for a material proxy address, port,
-  protocol or credential change, or a final preflight failure. Duplicate path,
-  DNS and unrelated-interface notifications no longer interrupt Claude. Sleep
-  closes immediately; wake restores an automatic pause only when the original
-  configuration still validates. A manual pause never resumes by itself.
-- Claude Desktop sign-in persistence is explicit. Workspaces, logs and temporary
-  files remain session-scoped, while cookies, local sign-in state and Claude data
-  can stay in a Routekeeper-owned HOME and be cleared separately. The option is
-  off by default.
-- Input-method compatibility grants read access only to the exact `.app` bundles
-  of currently enabled or selected input methods, such as
-  `/Library/Input Methods/WeType.app`. It does not open all of `/Library` and
-  does not read dictionaries, history, learning data or other input-method user
-  data.
-- Claude Desktop email sign-in uses a local callback broker: copy the official
-  `claude.ai/magic-link` URL from the email and paste it into Routekeeper. It
-  validates the link in memory, never fetches it, never saves or logs its token,
-  and delivers the callback only to the currently recorded sandboxed Claude
-  instance instead of falling back to a browser outside the sandbox.
-- Authorization handoff lets Claude submit external operations as a JSON
-  manifest and payload in the exchange folder without exposing Git remotes, SSH
-  keys, GitHub/Notion tokens or host links to the sandbox. Routekeeper freezes
-  the payload in memory, shows its actual contents, and only after user approval
-  saves a file or applies an unstaged Git patch on the host. It never commits or
-  pushes automatically.
-- For an official Science package without `Claude Science Shell.app`,
-  Routekeeper does not modify or re-sign the app. It starts the signed
-  `claude-science` daemon inside an outer Seatbelt profile and hosts the
-  official web UI in a non-persistent `WKWebView`. The view can reach only the
-  daemon's two actual loopback ports; external navigation, extra windows and
-  other local ports are blocked, and downloads go only to the session exchange
-  folder.
-- Cleanup is grouped by host Claude Desktop, host Claude Code, host/sandboxed
-  Claude Science, current and past Routekeeper sessions, and the persistent
-  sign-in profile. Only allowlisted caches, temporary files and logs are
-  considered; sessions and profiles must carry Routekeeper ownership markers.
-  Matching running processes lock their targets, and unavailable process
-  inspection fails closed. Cookies, IndexedDB, Local Storage, Session Storage,
-  WebStorage, HTTPStorages, conversations, projects, settings, OAuth files and
-  device identifiers are excluded from ordinary cleanup.
-- An optional long-lived CLI credential helper that stores its value in the
-  user's Keychain.
-- Redacted diagnostic export and local monitoring history.
+## Contents
 
-Routekeeper reports evidence from the current Mac. It does not promise
-zero-leak operation, server-side account status, or immunity from every
-application-specific network path. Review the on-screen limitations and
-verification documents before relying on a check.
+- [Why Routekeeper](#why-routekeeper)
+- [The workflow](#the-workflow)
+- [Feature overview](#feature-overview)
+- [Isolation model](#isolation-model)
+- [Evidence and fail-closed behavior](#evidence-and-fail-closed-behavior)
+- [Interface](#interface)
+- [Quick start](#quick-start)
+- [Command line](#command-line)
+- [Local data](#local-data)
+- [Privacy and security](#privacy-and-security)
+- [Project layout](#project-layout)
+- [Current limitations](#current-limitations)
+- [Documentation](#documentation)
+- [License](#license)
 
-The process sandbox is experimental. It relies on dynamically generated macOS
-`sandbox-exec` profiles, which Apple marks as deprecated and may change. A
-preflight failure keeps Claude Code from launching with unrestricted access.
-Sandboxed processes cannot listen on localhost project ports or launch the
-default browser automatically; preview work after ending the session instead.
-The sandbox keeps session timezone, language and locale consistent, but it is
-process and file isolation, not a full virtual machine. It cannot spoof the
-hardware sales region and does not guarantee account, device-fingerprint, or
-server-side risk outcomes.
+## Why Routekeeper
 
-Claude Desktop may use loopback services inside the sandbox, but direct LAN and
-public connections remain blocked. If Claude attempts to open the system browser
-for OAuth, that step may fail; Routekeeper does not widen public access for it.
-The UI language is derived from the session timezone (for example,
-`Asia/Shanghai` maps to Simplified Chinese) through launch arguments and the
-isolated HOME rather than by reading the host app's UI language.
+A proxy client reporting "connected" does not prove that the intended traffic
+uses the intended path. The system proxy, TUN routing, explicit proxies, IPv4,
+IPv6, DNS, application-level connections and the upstream node can all form
+different paths.
 
-Seatbelt does not virtualize host network metadata. A sandboxed Claude process
-can run queries such as `/usr/sbin/ipconfig`, `/sbin/ifconfig` or `netstat` and
-may read interface names, local addresses, routes and resolver configuration.
-This does not permit direct LAN or public traffic, but it can contribute to
-device fingerprinting. Hiding those metadata requires a VM or another network
-namespace boundary; blocking the command names alone would be cosmetic because
-the same data is available through system APIs.
+Routekeeper turns those signals into a reviewable evidence chain:
 
-The Claude Science daemon's own nested sandbox cannot apply `sandbox-exec` a
-second time inside the outer Seatbelt, so its log may report that the inner
-sandbox is unavailable and continue. Routekeeper's outer Seatbelt remains the
-enforced boundary. Routekeeper never uses `--dangerously-no-sandbox` and never
-falls back to an unrestricted launch merely because the nested probe failed.
+```text
+Observe the local path
+    ↓
+Compare intended and observed exits
+    ↓
+Verify that a proxy failure really blocks traffic
+    ↓
+Run sensitive work in an isolated session
+    ↓
+Review changes, clean up data, retain the result
+```
 
-Exit checks use an exact IP match when possible. If the proxy node presents a
-different IPv6 address to the Claude CDN for each request, Routekeeper instead
-anchors verification on the same relay's stable IPv4 exit and records the
-observed IPv6 evidence. The UI does not claim that the rotating IPv6 and stable
-IPv4 addresses are literally equal, and pasting one rotating IPv6 address is
-not treated as a stable verification target.
+It never treats "not checked" as "passed", and it does not modify proxy clients,
+subscriptions, nodes or macOS proxy settings on your behalf.
 
-## Requirements
+## The workflow
 
-- macOS 14 or later.
-- Xcode or a Swift 5.10-compatible toolchain.
-- No third-party Swift packages.
+### 1. Observe
 
-The current release artifact is built for Apple Silicon. Intel Macs can build
-from source with a matching Swift toolchain.
+Routekeeper reads IPv4/IPv6 routes, system and explicit proxy settings, DNS,
+TUN indicators and selected process connections, then confirms the observed
+public exit through external services.
 
-## Build and test
+### 2. Verify
+
+It compares the intended exit, system path, proxy path and external observation.
+Evidence expires after a network, proxy, DNS or address change, sleep/wake, app
+restart or its own time limit.
+
+### 3. Fail closed
+
+Unknown, stale or failed evidence never becomes a protected state. When gateway
+protection is selected, monitoring and protected launches remain blocked until
+the current network session produces fresh passing evidence.
+
+### 4. Isolate
+
+Experimental isolation gives terminal-style tasks, desktop applications and web
+sessions their own workspace copy, HOME, logs, temporary directory and controlled
+network relay. The original project is a read-only source and is never replaced
+automatically.
+
+### 5. Review and clean
+
+Users can inspect workspace changes, external handoff requests and local reports,
+then clean owned caches, sessions, browser profiles and other Routekeeper data.
+
+## Feature overview
+
+| Area | Capabilities |
+| --- | --- |
+| Overview | Health, protection completeness, protected scopes, gateway status, recent checks and attention items |
+| Network protection | IPv4/IPv6, system and explicit proxy paths, exit consistency, DNS, UDP/STUN and service reachability |
+| Proxy gateway | Current-path, node-failure, client-exit and restored-path verification; 15-minute evidence lifetime |
+| Experimental isolation | Three run targets, shared environment settings, separate workspaces, isolated HOME, local relay and fail-closed startup |
+| Credentials | Keychain-backed CLI credentials; independent desktop and web sign-in state |
+| Workspaces | User-visible copies, change review, Finder reveal, authorized handoff and unstaged Git patch application |
+| Cleanup | Allowlisted scans, ownership markers, running-process protection, symlink refusal and Trash-based cleanup |
+| Activity | Local events, connection investigation, exit history, redacted reports and raw local reports |
+| Interface | Native sidebar, title-bar menus, menu-bar residency, light/dark appearance, text scaling and bilingual UI |
+| Automation | Read-only self-check and egress-audit CLI with JSON output and explicit exit codes |
+
+### Network inspection
+
+- Inspects IPv4 and IPv6 without treating an inactive IPv6 stack as a failure.
+- Compares system, proxy, explicit-proxy and externally observed exits.
+- Checks DNS routing, UDP/STUN mappings and target-service TLS reachability.
+- Detects physical IPv6 exposure, unconfirmed TUN routing, dual-stack mismatch
+  and exit drift.
+- Keeps the last two complete reports and up to 20 exit-history records for
+  comparison.
+- Supports automatic checks, continuous monitoring, attention notifications and
+  an optional bounded packet-header capture.
+
+### Proxy gateway verification
+
+The gateway check is split into consecutive stages:
+
+1. The current path can reach the target.
+2. Disconnecting the node blocks target access.
+3. Quitting the proxy client still blocks target access.
+4. Restoring the proxy brings the exit back to the intended value.
+
+Only complete evidence from the current network session passes. Proxy, network,
+DNS or settings changes, sleep/wake, app restarts and the 15-minute time limit
+invalidate earlier evidence.
+
+### Protection completeness
+
+The score in Overview is an evidence map, not a marketing number. It covers:
+
+- protection settings;
+- the local path;
+- external exits and services;
+- the execution environment;
+- proxy fail-closed behavior.
+
+Disabled optional features are not counted as failures. Insufficient, stale or
+mismatched evidence cannot be presented as a high score.
+
+## Isolation model
+
+Experimental isolation supports three target types:
+
+| Target | Intended work | Isolation |
+| --- | --- | --- |
+| Terminal-style target | Code, scripts and local project operations | Separate workspace, HOME, terminal session and controlled upstream |
+| Desktop application target | GUI work that may need local sign-in state | Signature validation, separate HOME, optional persistent sign-in and controlled network |
+| Browser target | Web work with independent downloads and sign-in | Separate browser profile, download directory and network pause/resume |
+
+All three targets share one timezone, language, region, proxy and fixed-exit
+configuration, while each session remains independent.
+
+### File boundaries
+
+```text
+Original project (read-only source)
+    ↓ copied automatically
+~/Routekeeper/Workspaces/<project>/<session>/workspace/
+    ├── working copy
+    └── session.json
+
+~/Library/Application Support/Routekeeper/
+    ├── Isolation/<UUID>/     # HOME, logs, control files and temporary data
+    └── Profiles/             # Persistent sign-in and dedicated browser profiles
+```
+
+Workspaces live in a user-visible folder in the home directory and can be
+revealed in Finder at any time. Ending a session does not overwrite the original
+project, commit changes or push a branch.
+
+### Network boundary
+
+- Each isolated session reaches only its own local relay.
+- The relay supports loopback HTTP CONNECT, SOCKS5 and mixed upstreams.
+- If the relay or upstream is unavailable, the session fails instead of falling
+  back to direct internet access.
+- Direct LAN and public connections are disabled by default.
+- Isolated processes cannot listen on arbitrary host localhost ports or open the
+  default browser automatically.
+- Sleep closes networking immediately. Wake revalidates the path, and a manual
+  pause never resumes by itself.
+
+### Authorized handoff
+
+When a restricted task needs to write back to the host, it can submit a JSON
+manifest and payload instead of receiving host Git remotes, SSH keys, access
+tokens or unrestricted file access.
+
+Routekeeper:
+
+- freezes the request in memory;
+- displays file size, SHA256 and actual contents;
+- requires explicit approval or rejection;
+- saves only to a selected location or applies an unstaged Git patch;
+- never commits, pushes, publishes or uploads automatically.
+
+## Evidence and fail-closed behavior
+
+Routekeeper describes results with three states:
+
+| State | Meaning |
+| --- | --- |
+| Pass | Valid evidence was obtained in the current network session |
+| Fail | The check completed but the result did not match expectations |
+| Unknown / stale | There is not enough valid evidence to call the check a pass |
+
+Fail-closed behavior applies across monitoring, gateway checks, isolated startup
+and cleanup. If process state, ownership markers or evidence cannot be verified,
+Routekeeper stops rather than guessing.
+
+## Interface
+
+- Native macOS sidebar and detail layout with standard split-view shortcuts.
+- Native title-bar menus for network protection and isolation.
+- Menu-bar status item that remains available after the main window closes.
+- Light, dark and system appearance.
+- Multiple text-scale levels and accessibility-aware motion.
+- Simplified Chinese, English and system-language modes.
+- A native layered app-icon pipeline with current macOS glass, lighting and
+  appearance variants.
+- First-run terms confirmation, page-level help, privacy details and risk
+  notices.
+
+## Quick start
+
+### Requirements
+
+- macOS 14 or later
+- Xcode or a Swift 5.10-compatible toolchain
+- No third-party Swift packages
+
+### Build
 
 ```sh
+git clone <repository-url>
+cd Routekeeper
+
 swift test --scratch-path /tmp/routekeeper-build
 bash scripts/build-app.sh
+open dist/Routekeeper.app
+```
+
+Create a local DMG:
+
+```sh
 bash scripts/build-dmg.sh
 ```
 
-`build-app.sh` creates an ad-hoc signed `dist/Routekeeper.app`.
-`build-dmg.sh` creates a draggable-to-Applications DMG for local distribution.
-Build output and signing profiles are excluded from Git.
+Local builds are ad-hoc signed by default. They are intended for development and
+verification, not as a final public distribution package.
 
-The test suite currently contains 203 tests (3 environment-gated skips)
-covering route evidence, IPv6, DNS/UDP probes, report redaction, monitoring
-state, process scope, capture
-validation, presentation behavior, local relay protocols, Seatbelt file and
-network enforcement, system-proxy alignment, localhost-listener blocking,
-child-process inheritance, sandbox status handling, local-data reset boundaries,
-proxy-gateway evidence freshness, ordinary-monitoring and desktop launch gating,
-the sandbox's warning-only policy, official Claude Science
-discovery and daemon startup, control-socket access, two-port WebKit rules,
-content-rule compilation, one-time nonce redaction, the rotating-IPv6
-stable-IPv4 anchor, ownership-marker boundaries, symbolic-link refusal,
-cache-scope partitioning, and fail-closed running-process protection.
+The current suite contains **226 tests**, with 3 environment-gated network
+acceptance tests skipped by default. Coverage includes path evidence, IPv6,
+report redaction, gateway invalidation, isolation boundaries, workspaces,
+session cleanup, interface state and termination confirmation.
 
-## Read-only CLI
+## Command line
+
+Run a read-only self-check:
 
 ```sh
-"dist/Routekeeper.app/Contents/MacOS/Routekeeper" --self-check
-"dist/Routekeeper.app/Contents/MacOS/Routekeeper" --egress-audit --output egress.json
+dist/Routekeeper.app/Contents/MacOS/Routekeeper --self-check
 ```
 
-These commands do not enable monitoring, change proxy settings, install a
-system extension, or start packet capture. Exit code `0` means the requested
-checks passed, `2` means the report contains failures, and `1` means the
-command or output could not be completed.
+Write a redacted egress report:
 
-## Distribution status
+```sh
+dist/Routekeeper.app/Contents/MacOS/Routekeeper \
+  --egress-audit \
+  --output egress.json
+```
 
-The checked-in source can build a local development package. Public
-distribution still requires Developer ID signing, notarization, and validation
-on the target macOS versions. Provisioning profiles and private signing
-material are intentionally not committed.
+Optional flags select target addresses, check intervals, DNS/UDP skipping and
+third-party IP intelligence. The CLI does not enable monitoring, modify proxy
+settings, install a system extension or start packet capture.
 
-Apple Development and App Store signing use the `content-filter-provider`
-Network Extension entitlement. Direct distribution signed with a Developer ID
-Application certificate uses `content-filter-provider-systemextension`. The
-signed build script selects the value allowed by the supplied provisioning
-profiles.
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The requested checks passed or the report was written |
+| `1` | Arguments, output or command execution failed |
+| `2` | Checks completed but the report contains failures |
+
+## Local data
+
+| Data | Location |
+| --- | --- |
+| App settings | macOS `UserDefaults` |
+| Exit history and recent reports | Routekeeper local application data |
+| CLI credential | macOS Keychain |
+| Isolated HOME, logs and temporary files | `~/Library/Application Support/Routekeeper/Isolation/` |
+| Persistent sign-in and browser profiles | `~/Library/Application Support/Routekeeper/Profiles/` |
+| User workspaces | `~/Routekeeper/Workspaces/` |
+| Exported reports | A location selected by the user |
+
+Routekeeper has no developer-operated account system, telemetry, advertising SDK
+or automatic report upload. Inspections connect directly to IP lookup, STUN, DNS
+and user-configured proxy upstreams; those third parties may see the current
+public exit and request metadata. See the [Privacy Notice](PRIVACY.md) for the
+full data flow.
+
+## Privacy and security
+
+- Third-party IP intelligence is off by default.
+- CLI credentials are stored only in Keychain and never in projects, reports,
+  logs or the exchange directory.
+- Reports support redacted export that removes IP addresses, local paths and
+  process identifiers.
+- Persistent sign-in and browser profiles are isolated and do not import host
+  cookies, passwords or history automatically.
+- Cleanup only targets allowlisted items carrying Routekeeper ownership markers.
+- Running processes lock cleanup targets; unverifiable process state fails
+  closed.
+- Workspaces, sign-in profiles and exchange files are never uploaded
+  automatically.
+
+Do not paste credentials, cookies, full IP addresses, personal paths or logs into
+a public issue. See [SECURITY.md](SECURITY.md) for reporting guidance.
+
+## Project layout
+
+```text
+Sources/
+├── GuardCore/          # Network evidence, exits, isolation models, cleanup and reports
+├── Routekeeper/        # SwiftUI + AppKit app, interface and session control
+└── CAuditToken/        # Process identity verification helper
+
+NetworkExtension/       # Process-scoped filtering source and authorization boundary
+Tests/                  # Core, network, isolation and presentation tests
+scripts/                # Build, signing, DMG and native icon generation
+docs/                   # Features, design, network verification and release notes
+```
+
+SwiftUI provides the main interface. AppKit integrates windows, the menu bar,
+title-bar menus, the Dock icon and other macOS system surfaces. Runtime isolation
+combines Seatbelt profiles, process identity checks and a local relay.
+
+## Current limitations
+
+- The current development build is ad-hoc signed and not notarized.
+- Process-scoped Network Extension filtering exists in source but cannot be
+  activated by the current ad-hoc build.
+- Experimental isolation depends on macOS `sandbox-exec`, which Apple marks as
+  deprecated.
+- Isolation is a process, file and network boundary, not a virtual machine.
+- It does not virtualize every host network detail, including interface names,
+  local addresses, routes and resolver configuration.
+- It does not spoof hardware sales regions or guarantee server-side risk, account
+  or device-fingerprint outcomes.
+- Restricted targets cannot listen on host localhost project ports or launch the
+  default browser automatically.
+- Workspace copies never overwrite the source project, and Git patches are never
+  committed or pushed automatically.
+- Routekeeper does not modify proxy clients or subscriptions.
+- Results describe evidence from the current Mac and current network session;
+  they are not a guarantee of zero leakage or permanent validity.
 
 ## Documentation
 
-- [Isolated runner plan](docs/plans/2026-10-21-isolated-runner.md)
-- [Authorization handoff](docs/authorization-handoff.md)
-- [Proxy gateway verification plan](docs/plans/2026-10-21-proxy-gateway-verification.md)
+- [Feature list](docs/FEATURES.zh-CN.md)
+- [Authorized handoff](docs/authorization-handoff.md)
 - [Design notes](docs/design.md)
 - [Network verification](docs/network-v2-verification.md)
-- [Handoff notes](HANDOFF.md)
+- [Terms](TERMS.md)
+- [Privacy notice](PRIVACY.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
 
-## Privacy
+## License
 
-Settings remain in the app's user defaults and monitoring events remain in
-memory unless the user exports a report. Diagnostic exports are designed to
-redact addresses, paths, and process identifiers when the redacted format is
-selected. Optional external checks may reveal the current exit address to the
-third-party service used for that check.
+Routekeeper uses the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- Personal study, research, experiments and other noncommercial use are allowed.
+- Distribution and modification are allowed within the license terms.
+- Unauthorized commercial use, paid distribution and commercial integration are
+  prohibited.
+- This is not an OSI-approved open-source license.
+
+For commercial authorization, contact the maintainers through a repository
+issue.

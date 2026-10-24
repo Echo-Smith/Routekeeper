@@ -5,6 +5,13 @@ import XCTest
 
 final class ClaudeWebBrowserTests: XCTestCase {
     func testLanguageAndTimezoneCanBeConfiguredIndependently() {
+        XCTAssertEqual(
+            IsolationSessionEnvironment.normalizedLanguageIdentifier("en-US"),
+            "en-US"
+        )
+        XCTAssertNil(
+            IsolationSessionEnvironment.normalizedLanguageIdentifier("en\u{2014}US")
+        )
         let configuration = SandboxSharedConfiguration(
             timezoneIdentifier: "Asia/Tokyo",
             languageIdentifier: "en-US",
@@ -14,6 +21,7 @@ final class ClaudeWebBrowserTests: XCTestCase {
 
         XCTAssertEqual(targetConfiguration.timezoneIdentifier, "Asia/Tokyo")
         XCTAssertEqual(targetConfiguration.languageIdentifier, "en-US")
+        XCTAssertTrue(configuration.hasValidLanguage)
         XCTAssertEqual(
             IsolationSessionEnvironment.posixLocale(for: targetConfiguration.languageIdentifier),
             "en_US.UTF-8"
@@ -59,6 +67,7 @@ final class ClaudeWebBrowserTests: XCTestCase {
 
         XCTAssertEqual(configuration.languageIdentifier, "ja-JP")
         XCTAssertTrue(configuration.hasValidLanguage)
+        XCTAssertFalse(configuration.usesEgressRegionalDefaults)
     }
 
     func testChromeLaunchArgumentsKeepNativeSandboxAndApplyWebLanguage() {
@@ -81,6 +90,36 @@ final class ClaudeWebBrowserTests: XCTestCase {
         XCTAssertTrue(arguments.contains("--disable-quic"))
         XCTAssertFalse(arguments.contains("--no-sandbox"))
         XCTAssertEqual(arguments.last, "https://claude.ai/")
+    }
+
+    func testCleanExitMarkerPreservesChromeProfilePreferences() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-chrome-preferences-\(UUID())", isDirectory: true)
+        let profile = root.appendingPathComponent("Claude", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let preferencesURL = profile.appendingPathComponent("Preferences")
+        let original: [String: Any] = [
+            "profile": [
+                "exit_type": "Crashed",
+                "name": "Claude"
+            ],
+            "keep_me": ["nested": true]
+        ]
+        try JSONSerialization.data(withJSONObject: original)
+            .write(to: preferencesURL, options: .atomic)
+
+        try ClaudeWebBrowserController.markProfileCleanlyExited(profileURL: root)
+
+        let updated = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: preferencesURL))
+                as? [String: Any]
+        )
+        let updatedProfile = try XCTUnwrap(updated["profile"] as? [String: Any])
+        XCTAssertEqual(updatedProfile["exit_type"] as? String, "Normal")
+        XCTAssertEqual(updatedProfile["exited_cleanly"] as? Bool, true)
+        XCTAssertEqual(updatedProfile["name"] as? String, "Claude")
+        XCTAssertEqual((updated["keep_me"] as? [String: Bool])?["nested"], true)
     }
 
     func testChromeEnvironmentUsesDedicatedHomeWithIndependentTimezoneAndLanguage() {
@@ -107,5 +146,96 @@ final class ClaudeWebBrowserTests: XCTestCase {
         let installation = ClaudeWebBrowserDiscovery.locate()
         XCTAssertEqual(installation?.bundleIdentifier, "com.google.Chrome")
         XCTAssertEqual(installation?.teamIdentifier, "EQHXZ8M8AV")
+    }
+
+    @MainActor
+    func testReadySummaryRequiresDetectionAndAStoppedBrowser() {
+        let profileRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-chrome-summary-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: profileRoot) }
+        let controller = ClaudeWebBrowserController(profilesRoot: profileRoot, discover: false)
+
+        XCTAssertFalse(controller.showsReadySummary)
+
+        controller.discovering = false
+        controller.installation = ClaudeWebBrowserInstallation(
+            appURL: URL(fileURLWithPath: "/Applications/Google Chrome.app"),
+            executableURL: URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            bundleIdentifier: ClaudeWebBrowserDiscovery.bundleIdentifier,
+            displayName: "Google Chrome",
+            signingIdentifier: ClaudeWebBrowserDiscovery.bundleIdentifier,
+            teamIdentifier: ClaudeWebBrowserDiscovery.teamIdentifier,
+            shortVersion: "156.0",
+            bundleVersion: "8078.48"
+        )
+
+        XCTAssertTrue(controller.showsReadySummary)
+        controller.phase = .running
+        XCTAssertFalse(controller.showsReadySummary)
+    }
+
+    @MainActor
+    func testSuccessfulChromeDiscoveryReplacesTransientVerificationMessage() async throws {
+        guard FileManager.default.fileExists(atPath: "/Applications/Google Chrome.app") else {
+            throw XCTSkip("Google Chrome is not installed on this Mac.")
+        }
+        let profileRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-chrome-discovery-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: profileRoot) }
+        let controller = ClaudeWebBrowserController(profilesRoot: profileRoot, discover: false)
+        controller.phase = .stopped
+        controller.message = "正在验证 Google Chrome 的官方签名与版本。"
+
+        await controller.refreshInstallation()
+
+        XCTAssertNotNil(controller.installation)
+        XCTAssertEqual(
+            controller.message,
+            "Google Chrome 已就绪。Chrome 会使用独立配置和当前会话的语言、时区与代理。"
+        )
+    }
+
+    @MainActor
+    func testOwnedProfileRootAdoptsManagedDataWithoutChangingIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-profile-adoption-\(UUID())", isDirectory: true)
+        let savedFile = root.appendingPathComponent("ChromeProfile/Claude/Cookies")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: savedFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let original = Data("existing-cookie-data".utf8)
+        try original.write(to: savedFile)
+
+        XCTAssertTrue(try ClaudeWebBrowserController.ensureOwnedProfileRoot(at: root))
+        XCTAssertEqual(try Data(contentsOf: savedFile), original)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(".routekeeper-profile").path
+            )
+        )
+        XCTAssertFalse(try ClaudeWebBrowserController.ensureOwnedProfileRoot(at: root))
+    }
+
+    @MainActor
+    func testOwnedProfileRootRejectsUnknownTopLevelContent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-profile-unknown-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: root.appendingPathComponent("user-data.txt"))
+
+        XCTAssertThrowsError(try ClaudeWebBrowserController.ensureOwnedProfileRoot(at: root))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(".routekeeper-profile").path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("user-data.txt").path
+            )
+        )
     }
 }

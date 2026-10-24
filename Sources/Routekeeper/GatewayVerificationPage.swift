@@ -67,7 +67,7 @@ struct GatewayVerificationPage: View {
                 .routekeeperFont(.callout, weight: .medium)
             }
 
-            if mode != .off, !controller.message.isEmpty {
+            if mode != .off, status != .failed, !controller.message.isEmpty {
                 messageFootnote
             }
         }
@@ -89,11 +89,7 @@ struct GatewayVerificationPage: View {
                 .routekeeperFont(.callout, weight: .semibold)
             Spacer(minLength: 12)
             Button(action: onChangeMode) {
-                Label(
-                    text("配置保护方式", "Configure protection"),
-                    systemImage: "arrow.up.right"
-                )
-                .labelStyle(.titleAndIcon)
+                Text(text("配置保护方式", "Configure protection"))
             }
                 .buttonStyle(.borderless)
                 .routekeeperFont(.callout, weight: .medium)
@@ -211,12 +207,7 @@ struct GatewayVerificationPage: View {
                 )
             )
         case .failed:
-            instruction(
-                text(
-                    "检查所选节点、TUN 模式和系统代理，确认代理入口与 Claude 路径使用同一出口后从头重测。",
-                    "Check the selected node, TUN mode and system proxy. Confirm the proxy entry and Claude path use the same exit, then rerun from the start."
-                )
-            )
+            EmptyView()
         case .expired:
             instruction(
                 text(

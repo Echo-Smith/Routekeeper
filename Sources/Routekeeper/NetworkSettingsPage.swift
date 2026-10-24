@@ -23,9 +23,10 @@ struct NetworkSettingsPage: View {
 
             protectionScopeSection
                 .appSurface(.primary)
+                .id(DashboardScrollID.section(.scope))
             protectionModeSection
                 .appSurface(.primary)
-                .id(NetworkProtectionAnchor.protectionMode)
+                .id(DashboardScrollID.section(.protectionMode))
             exitsAndMonitoringSection
                 .appSurface(.primary)
         }
@@ -84,28 +85,6 @@ struct NetworkSettingsPage: View {
             .accessibilityLabel(text("保护方式", "Protection mode"))
             .accessibilityIdentifier("network-settings-protection-mode")
             .disabled(settingsLocked)
-
-            if !store.networkFilter.canInstall {
-                Label {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(text("系统过滤当前不可用", "System filtering is unavailable"))
-                            .routekeeperFont(.callout, weight: .medium)
-                        Text(text(
-                            "当前为临时签名构建。分流与“仅限制 Claude”规则需要在代理客户端中配置。",
-                            "This temporary-signature build requires split-routing and Claude-only rules to be configured in the proxy client."
-                        ))
-                        .routekeeperFont(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .appSurface(.inset, corner: 10)
-            }
 
             if store.settings.gatewayProtectionMode != .off {
                 AppHairline()
@@ -309,8 +288,8 @@ extension GatewayProtectionMode {
                 : "国内直连，其余流量走海外节点；节点断开时断网。"
         case .claudeOnly:
             return en
-                ? "Restrict Claude Desktop and Claude Code only; the proxy client must support process rules."
-                : "只限制 Claude Desktop 与 Claude Code；需要客户端支持进程分流。"
+                ? "Restrict Claude and Claude Code only; the proxy client must support process rules."
+                : "只限制 Claude 与 Claude Code；需要客户端支持进程分流。"
         }
     }
 }

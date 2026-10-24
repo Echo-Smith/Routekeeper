@@ -109,7 +109,7 @@ final class CredentialController {
         let command = "\(shellQuote(installation.executableURL.path)) setup-token"
         message = openTerminal(command: command)
             ? "已打开 Terminal；完成官方认证后，把生成的登录凭证粘贴到下方。"
-            : "无法打开“终端”；请手动运行 \(installation.executableURL.path) setup-token。"
+            : "无法打开“终端”；请在“隐私与安全性 > 自动化”中允许 Routekeeper 控制“终端”，或手动运行 \(installation.executableURL.path) setup-token。"
     }
 
     func launchClaudeCode() {
@@ -175,7 +175,13 @@ final class CredentialController {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = ["-e", source]
-        do { try task.run(); return true } catch { return false }
+        do {
+            try task.run()
+            task.waitUntilExit()
+            return task.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private func appleScriptString(_ value: String) -> String {

@@ -2,11 +2,27 @@ import AppKit
 import SwiftUI
 
 struct PageOverflowAction {
+    let id: UUID
     let title: String
     let systemImage: String
     var isDisabled = false
     var isDestructive = false
     let action: () -> Void
+
+    init(
+        title: String,
+        systemImage: String,
+        isDisabled: Bool = false,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        id = UUID()
+        self.title = title
+        self.systemImage = systemImage
+        self.isDisabled = isDisabled
+        self.isDestructive = isDestructive
+        self.action = action
+    }
 }
 
 enum PageOverflowEntry {
@@ -43,38 +59,43 @@ final class RoutekeeperToolbarCoordinator: ObservableObject {
     }
 }
 
-struct PageOverflowMenu: NSViewRepresentable {
-    let label: String
-    let entries: [PageOverflowEntry]
+struct PageOverflowToolbarHost: NSViewRepresentable {
+    @ObservedObject private var coordinator = RoutekeeperToolbarCoordinator.shared
 
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PageOverflowControl?, context: Context) -> CGSize? {
-        CGSize(width: 44, height: 44)
+    func makeNSView(context: Context) -> PageOverflowToolbarHostView {
+        let view = PageOverflowToolbarHostView()
+        view.coordinator = coordinator
+        return view
     }
 
-    func makeNSView(context: Context) -> PageOverflowControl {
-        PageOverflowControl()
+    func updateNSView(_ view: PageOverflowToolbarHostView, context: Context) {
+        view.synchronize()
     }
 
-    func updateNSView(_ view: PageOverflowControl, context: Context) {
-        view.configure(label: label, entries: entries)
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: PageOverflowToolbarHostView?,
+        context: Context
+    ) -> CGSize? {
+        .zero
     }
 }
 
 @MainActor
-final class PageOverflowControl: NSControl {
-    private var entries: [PageOverflowEntry] = []
-    private var trackingArea: NSTrackingArea?
-    private var isHovering = false
-    private var isPressed = false
-    private var pressResetTask: Task<Void, Never>?
+final class PageOverflowToolbarHostView: NSView {
+    weak var coordinator: RoutekeeperToolbarCoordinator? {
+        didSet { synchronize() }
+    }
+
+    private var toolbar: NSToolbar?
+    private var toolbarObservation: NSKeyValueObservation?
+    private var toolbarNotifications: [NSObjectProtocol] = []
+    private var resynchronizeTask: Task<Void, Never>?
+    private var isSynchronizing = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        setAccessibilityRole(.button)
-        setAccessibilityElement(true)
-        widthAnchor.constraint(equalToConstant: 44).isActive = true
-        heightAnchor.constraint(equalToConstant: 44).isActive = true
+        isHidden = true
     }
 
     @available(*, unavailable)
@@ -82,128 +103,158 @@ final class PageOverflowControl: NSControl {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: 44, height: 44)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeWindowToolbar()
+        synchronize()
     }
 
-    override var isFlipped: Bool {
-        true
-    }
+    func synchronize() {
+        guard !isSynchronizing else { return }
+        isSynchronizing = true
+        defer { isSynchronizing = false }
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
+        guard let toolbar, let coordinator else { return }
+        PageOverflowToolbar.prepare(toolbar)
+        let item = toolbar.items.first {
+            $0.itemIdentifier == PageOverflowToolbar.identifier
+        } as? NSMenuToolbarItem
 
-    override var isEnabled: Bool {
-        didSet {
-            alphaValue = isEnabled ? 1 : 0.45
+        guard !coordinator.entries.isEmpty else {
+            if let item {
+                let index = toolbar.items.firstIndex { $0 === item }
+                if let index {
+                    toolbar.removeItem(at: index)
+                }
+            }
+            return
         }
-    }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        let circleRect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let fillOpacity: CGFloat = isPressed ? 0.22 : (isHovering ? 0.15 : 0.10)
-
-        NSColor.labelColor.withAlphaComponent(fillOpacity).setFill()
-        NSBezierPath(ovalIn: circleRect).fill()
-        NSColor.labelColor.withAlphaComponent(0.12).setStroke()
-        let border = NSBezierPath(ovalIn: circleRect)
-        border.lineWidth = 0.5
-        border.stroke()
-
-        let symbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 16,
-            weight: .semibold
-        ).applying(
-            NSImage.SymbolConfiguration(paletteColors: [.labelColor])
-        )
-        if let image = NSImage(
-            systemSymbolName: "ellipsis",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(symbolConfiguration) {
-            let imageSize = image.size
-            image.draw(
-                in: NSRect(
-                    x: (bounds.width - imageSize.width) / 2,
-                    y: (bounds.height - imageSize.height) / 2,
-                    width: imageSize.width,
-                    height: imageSize.height
-                ),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
+        let menuItem: NSMenuToolbarItem
+        if let item {
+            menuItem = item
+        } else {
+            toolbar.insertItem(
+                withItemIdentifier: PageOverflowToolbar.identifier,
+                at: toolbar.items.count
             )
+            guard let inserted = toolbar.items.first(where: {
+                $0.itemIdentifier == PageOverflowToolbar.identifier
+            }) as? NSMenuToolbarItem else { return }
+            menuItem = inserted
         }
-    }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self
+        PageOverflowToolbar.configure(
+            menuItem,
+            label: coordinator.label,
+            entries: coordinator.entries
         )
-        addTrackingArea(area)
-        trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        isHovering = true
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovering = false
-        isPressed = false
-        pressResetTask?.cancel()
-        pressResetTask = nil
-        needsDisplay = true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        isPressed = true
-        needsDisplay = true
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let wasInside = bounds.contains(convert(event.locationInWindow, from: nil))
-        guard wasInside, !entries.isEmpty else { return }
-        pressResetTask?.cancel()
-        pressResetTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(90))
-            guard let self, !Task.isCancelled else { return }
-            self.isPressed = false
-            self.needsDisplay = true
-            self.pressResetTask = nil
+    private func observeWindowToolbar() {
+        toolbarObservation?.invalidate()
+        toolbarObservation = nil
+        removeToolbarObservers()
+        guard let window else {
+            toolbar = nil
+            return
         }
-        openMenu()
+
+        toolbar = window.toolbar
+        toolbarObservation = window.observe(\.toolbar, options: [.new]) {
+            [weak self] _, _ in
+            Task { @MainActor in
+                self?.toolbar = self?.window?.toolbar
+                self?.synchronize()
+            }
+        }
+
+        let center = NotificationCenter.default
+        toolbarNotifications = [
+            center.addObserver(
+                forName: NSToolbar.didRemoveItemNotification,
+                object: toolbar,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    guard let self,
+                          let item = notification.userInfo?[NSToolbarUserInfoKey.itemKey] as? NSToolbarItem,
+                          item.itemIdentifier == PageOverflowToolbar.identifier else { return }
+                    self.scheduleResynchronize()
+                }
+            },
+            center.addObserver(
+                forName: NSToolbar.willAddItemNotification,
+                object: toolbar,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    guard let self,
+                          let item = notification.userInfo?[NSToolbarUserInfoKey.itemKey] as? NSMenuToolbarItem,
+                          item.itemIdentifier == PageOverflowToolbar.identifier,
+                          let coordinator = self.coordinator else { return }
+                    PageOverflowToolbar.configure(
+                        item,
+                        label: coordinator.label,
+                        entries: coordinator.entries
+                    )
+                }
+            }
+        ]
     }
 
-    override func rightMouseDown(with event: NSEvent) {
-        guard !entries.isEmpty else { return }
-        openMenu()
+    private func removeToolbarObservers() {
+        toolbarNotifications.forEach(NotificationCenter.default.removeObserver)
+        toolbarNotifications = []
     }
 
-    override func accessibilityPerformPress() -> Bool {
-        guard !entries.isEmpty else { return false }
-        openMenu()
-        return true
+    private func scheduleResynchronize() {
+        guard resynchronizeTask == nil else { return }
+        resynchronizeTask = Task { @MainActor [weak self] in
+            // SwiftUI can finish rebuilding its toolbar after AppKit posts the
+            // removal notification. Reinsert once that update has settled.
+            try? await Task.sleep(for: .milliseconds(40))
+            guard let self, !Task.isCancelled else { return }
+            self.resynchronizeTask = nil
+            self.synchronize()
+        }
+    }
+}
+
+@MainActor
+enum PageOverflowToolbar {
+    static let identifier = NSToolbarItem.Identifier(
+        "local.routekeeper.page-overflow"
+    )
+
+    static let delegate = PageOverflowToolbarDelegate()
+
+    static func makeItem() -> NSMenuToolbarItem {
+        let item = NSMenuToolbarItem(itemIdentifier: identifier)
+        item.label = "更多"
+        item.paletteLabel = "更多"
+        item.image = NSImage(
+            systemSymbolName: "ellipsis",
+            accessibilityDescription: "更多"
+        )
+        item.showsIndicator = false
+        item.visibilityPriority = .high
+        return item
     }
 
-    func configure(label: String, entries: [PageOverflowEntry]) {
-        self.entries = entries
-        toolTip = label
-        setAccessibilityLabel(label)
-        isEnabled = !entries.isEmpty
-        needsDisplay = true
+    static func configure(
+        _ item: NSMenuToolbarItem,
+        label: String,
+        entries: [PageOverflowEntry]
+    ) {
+        item.label = label
+        item.paletteLabel = label
+        item.toolTip = label
+        item.menu = makeMenu(entries)
+        item.isEnabled = !entries.isEmpty
     }
 
-    private func openMenu() {
+    static func makeMenu(_ entries: [PageOverflowEntry]) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -214,15 +265,15 @@ final class PageOverflowControl: NSControl {
             case .action(let action):
                 let item = NSMenuItem(
                     title: action.title,
-                    action: #selector(PageOverflowActionTarget.perform(_:)),
+                    action: #selector(PageOverflowToolbarActionTarget.performPageOverflowAction(_:)),
                     keyEquivalent: ""
                 )
-                item.target = PageOverflowActionTarget.shared
-                item.representedObject = PageOverflowActionBox(action.action)
+                item.target = PageOverflowToolbarActionTarget.shared
+                item.representedObject = action
                 item.isEnabled = !action.isDisabled
                 item.image = NSImage(
                     systemSymbolName: action.systemImage,
-                    accessibilityDescription: nil
+                    accessibilityDescription: action.title
                 )
                 if action.isDestructive {
                     item.attributedTitle = NSAttributedString(
@@ -233,28 +284,79 @@ final class PageOverflowControl: NSControl {
                 menu.addItem(item)
             }
         }
-
-        menu.popUp(
-            positioning: nil,
-            at: NSPoint(x: bounds.minX, y: bounds.maxY + 6),
-            in: self
-        )
-    }
-}
-
-private final class PageOverflowActionBox {
-    let action: () -> Void
-
-    init(_ action: @escaping () -> Void) {
-        self.action = action
+        return menu
     }
 }
 
 @MainActor
-private final class PageOverflowActionTarget: NSObject {
-    static let shared = PageOverflowActionTarget()
+final class PageOverflowToolbarDelegate: NSObject, NSToolbarDelegate {
+    static var previousDelegates: [NSToolbar.Identifier: NSToolbarDelegate] = [:]
 
-    @objc func perform(_ sender: NSMenuItem) {
-        (sender.representedObject as? PageOverflowActionBox)?.action()
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        if itemIdentifier == PageOverflowToolbar.identifier {
+            return PageOverflowToolbar.makeItem()
+        }
+        return previousDelegate(for: toolbar)?.toolbar?(
+            toolbar,
+            itemForItemIdentifier: itemIdentifier,
+            willBeInsertedIntoToolbar: flag
+        )
+    }
+
+    func toolbarDefaultItemIdentifiers(
+        _ toolbar: NSToolbar
+    ) -> [NSToolbarItem.Identifier] {
+        var identifiers = previousDelegate(for: toolbar)?
+            .toolbarDefaultItemIdentifiers?(toolbar)
+            ?? toolbar.items.map(\.itemIdentifier)
+        if !RoutekeeperToolbarCoordinator.shared.entries.isEmpty,
+           !identifiers.contains(PageOverflowToolbar.identifier) {
+            identifiers.append(PageOverflowToolbar.identifier)
+        }
+        return identifiers
+    }
+
+    func toolbarAllowedItemIdentifiers(
+        _ toolbar: NSToolbar
+    ) -> [NSToolbarItem.Identifier] {
+        var identifiers = previousDelegate(for: toolbar)?
+            .toolbarAllowedItemIdentifiers?(toolbar)
+            ?? toolbar.items.map(\.itemIdentifier)
+        if !identifiers.contains(PageOverflowToolbar.identifier) {
+            identifiers.append(PageOverflowToolbar.identifier)
+        }
+        return identifiers
+    }
+
+    private func previousDelegate(for toolbar: NSToolbar) -> NSToolbarDelegate? {
+        Self.previousDelegates[toolbar.identifier]
+    }
+}
+
+@MainActor
+final class PageOverflowToolbarActionTarget: NSObject {
+    static let shared = PageOverflowToolbarActionTarget()
+
+    @objc func performPageOverflowAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? PageOverflowAction else { return }
+        // AppKit runs menu actions inside menu tracking. Presenting SwiftUI
+        // sheets or windows synchronously can be swallowed by that event loop.
+        DispatchQueue.main.async {
+            action.action()
+        }
+    }
+}
+
+extension PageOverflowToolbar {
+    static func prepare(_ toolbar: NSToolbar) {
+        guard toolbar.delegate !== delegate else { return }
+        PageOverflowToolbarDelegate.previousDelegates[toolbar.identifier] = toolbar.delegate
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        toolbar.delegate = delegate
     }
 }

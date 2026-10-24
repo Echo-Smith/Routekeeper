@@ -7,6 +7,24 @@ let appStatusSuccess = Color.green
 let appStatusWarning = Color.orange
 let appStatusFailure = Color.red
 
+enum AppActionTone {
+    case primary
+    case success
+    case warning
+    case danger
+    case neutral
+
+    var color: Color {
+        switch self {
+        case .primary: return appAccent
+        case .success: return appStatusSuccess
+        case .warning: return appStatusWarning
+        case .danger: return appStatusFailure
+        case .neutral: return Color(nsColor: .secondaryLabelColor)
+        }
+    }
+}
+
 extension CheckLevel {
     var routekeeperStatusColor: Color {
         switch self {
@@ -44,6 +62,10 @@ enum AppSurfaceTone {
     case inset
 }
 
+enum AppCornerRadius {
+    static let card: CGFloat = 14
+}
+
 private struct AppSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -78,7 +100,10 @@ private struct AppSurfaceModifier: ViewModifier {
 }
 
 extension View {
-    func appSurface(_ tone: AppSurfaceTone = .primary, corner: CGFloat = 14) -> some View {
+    func appSurface(
+        _ tone: AppSurfaceTone = .primary,
+        corner: CGFloat = AppCornerRadius.card
+    ) -> some View {
         modifier(AppSurfaceModifier(tone: tone, corner: corner))
     }
 }
@@ -125,12 +150,12 @@ struct AppHairline: View {
 }
 
 extension View {
-    func routekeeperProminentButton() -> some View {
-        modifier(RoutekeeperProminentButtonModifier())
+    func routekeeperProminentButton(_ tone: AppActionTone = .primary) -> some View {
+        modifier(RoutekeeperProminentButtonModifier(tone: tone))
     }
 
-    func routekeeperSecondaryButton() -> some View {
-        modifier(RoutekeeperSecondaryButtonModifier())
+    func routekeeperSecondaryButton(_ tone: AppActionTone = .neutral) -> some View {
+        modifier(RoutekeeperSecondaryButtonModifier(tone: tone))
     }
 
     func routekeeperGlassCapsule(tint: Color = .clear) -> some View {
@@ -139,12 +164,15 @@ extension View {
 }
 
 private struct RoutekeeperProminentButtonModifier: ViewModifier {
+    let tone: AppActionTone
+
     @ViewBuilder
     func body(content: Content) -> some View {
         let styledContent = content
             .routekeeperFont(.callout, weight: .semibold)
             .controlSize(.large)
             .buttonBorderShape(.roundedRectangle(radius: 10))
+            .tint(tone.color)
         if #available(macOS 26.0, *) {
             styledContent.buttonStyle(.glassProminent)
         } else {
@@ -154,12 +182,15 @@ private struct RoutekeeperProminentButtonModifier: ViewModifier {
 }
 
 private struct RoutekeeperSecondaryButtonModifier: ViewModifier {
+    let tone: AppActionTone
+
     func body(content: Content) -> some View {
         content
             .routekeeperFont(.callout, weight: .medium)
             .controlSize(.large)
             .buttonStyle(.bordered)
             .buttonBorderShape(.roundedRectangle(radius: 9))
+            .tint(tone.color)
     }
 }
 

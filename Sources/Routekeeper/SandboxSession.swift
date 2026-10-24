@@ -61,6 +61,7 @@ final class SandboxSession {
 
     @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private let sessionsRoot: URL
+    @ObservationIgnored private let workspacesRoot: URL
     @ObservationIgnored private let profilesRoot: URL
     @ObservationIgnored private let relay = LocalRelay()
     @ObservationIgnored private var activeExecutable: URL?
@@ -73,15 +74,19 @@ final class SandboxSession {
     @ObservationIgnored private var networkValidationGeneration = 0
     @ObservationIgnored private var lastAcceptedNetworkFingerprint: NetworkFingerprint?
     @ObservationIgnored private let persistsConfiguration: Bool
+    @ObservationIgnored private var initialDiscoveryTask: Task<Void, Never>?
+    private var workspaceContainerRoot: URL?
 
     private static let configurationKey = "routekeeper-isolation-configuration-v1"
 
     init(
         preferences: UserDefaults = .standard,
         sessionsRoot: URL? = nil,
+        workspacesRoot: URL? = nil,
         profilesRoot: URL? = nil,
         initialConfiguration: IsolationConfiguration? = nil,
-        persistsConfiguration: Bool = true
+        persistsConfiguration: Bool = true,
+        discoversApplications: Bool = true
     ) {
         self.preferences = preferences
         self.persistsConfiguration = persistsConfiguration
@@ -89,6 +94,9 @@ final class SandboxSession {
             .appendingPathComponent("Library/Application Support/Routekeeper", isDirectory: true)
         self.sessionsRoot = sessionsRoot
             ?? applicationSupport.appendingPathComponent("Isolation", isDirectory: true)
+        self.workspacesRoot = workspacesRoot
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+                .appendingPathComponent("Routekeeper/Workspaces", isDirectory: true)
         self.profilesRoot = profilesRoot
             ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
         var loaded = initialConfiguration
@@ -106,8 +114,25 @@ final class SandboxSession {
         persistedClaudeProfileAvailable = Self.hasOwnedClaudeProfile(
             at: self.profilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
         )
-        refreshInstalledApplications()
-        recoverOrphanedSessions()
+        if discoversApplications {
+            initialDiscoveryTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let applications = await Task.detached(priority: .utility) {
+                    Self.locateApplications(
+                        manualCodePath: preferences.string(
+                            forKey: ClaudeCodeDiscovery.manualPathPreferenceKey
+                        )
+                    )
+                }.value
+                self.desktopInstallation = applications.desktop
+                self.claudeCodeInstallation = applications.code
+                self.desktopAppRunningOutsideSandbox = applications.desktopIsRunning
+            }
+            let sessionsRoot = self.sessionsRoot
+            Task.detached(priority: .utility) {
+                Self.recoverOrphanedSessions(in: sessionsRoot)
+            }
+        }
     }
 
     var canPrepare: Bool {
@@ -145,7 +170,22 @@ final class SandboxSession {
     var canResumeNetwork: Bool { !busy && phase == .networkPaused }
     var canEnd: Bool { phase.isActive || phase == .failed }
     var cleanupSessionsRoot: URL { sessionsRoot }
+    var cleanupWorkspacesRoot: URL { workspacesRoot }
     var cleanupProfilesRoot: URL { profilesRoot }
+    var workspaceURL: URL? {
+        workspaceContainerRoot?.appendingPathComponent("workspace", isDirectory: true)
+    }
+    var workspaceAvailable: Bool {
+        guard let workspaceURL else { return false }
+        return FileManager.default.fileExists(atPath: workspaceURL.path)
+    }
+
+    private func sessionLayout(root: URL) -> IsolationSessionLayout {
+        IsolationSessionLayout(
+            root: root,
+            workspace: workspaceContainerRoot?.appendingPathComponent("workspace", isDirectory: true)
+        )
+    }
 
     var statusTitle: String {
         switch phase {
@@ -156,15 +196,15 @@ final class SandboxSession {
             }
             if configuration.target == .claudeDesktop, !desktopIsolationSupported {
                 return desktopInstallation == nil
-                    ? "未检测到 Claude Desktop"
-                    : "Claude Desktop 无法隔离启动"
+                    ? "未检测到 Claude"
+                    : "Claude 无法隔离启动"
             }
             return configuration.hasRequiredPaths ? "可以创建会话" : "等待选择会话范围"
         case .preparing: return "正在准备隔离环境"
         case .checking: return "正在验证隔离边界"
         case .running:
             return configuration.target == .claudeDesktop
-                ? "官方 Claude Desktop 已隔离"
+                ? "官方 Claude 已隔离"
                 : "沙箱已隔离"
         case .networkPaused: return "网络已关闭"
         case .failed: return "启动失败"
@@ -239,6 +279,21 @@ final class SandboxSession {
         desktopAppRunningOutsideSandbox = !ClaudeDesktopDiscovery.runningBundleIdentifiers().isEmpty
     }
 
+    func loadInstalledApplicationsIfNeeded() async {
+        guard desktopInstallation == nil, claudeCodeInstallation == nil else { return }
+        if let initialDiscoveryTask {
+            await initialDiscoveryTask.value
+            guard desktopInstallation == nil, claudeCodeInstallation == nil else { return }
+        }
+        let manualCodePath = preferences.string(forKey: ClaudeCodeDiscovery.manualPathPreferenceKey)
+        let applications = await Task.detached(priority: .utility) {
+            Self.locateApplications(manualCodePath: manualCodePath)
+        }.value
+        desktopInstallation = applications.desktop
+        claudeCodeInstallation = applications.code
+        desktopAppRunningOutsideSandbox = applications.desktopIsRunning
+    }
+
     func refreshClaudeCodeDiscovery() {
         claudeCodeInstallation = ClaudeCodeDiscovery.locate(
             manualPath: preferences.string(forKey: ClaudeCodeDiscovery.manualPathPreferenceKey)
@@ -277,11 +332,11 @@ final class SandboxSession {
             return
         }
         if configuration.target == .claudeDesktop, desktopInstallation == nil {
-            message = "没有找到已验证签名的官方 Claude Desktop。请先从 Anthropic 官方渠道安装，再返回本页重新检测。"
+            message = "没有找到已验证签名的官方 Claude。请先从 Anthropic 官方渠道安装，再返回本页重新检测。"
             return
         }
         if configuration.target == .claudeDesktop, !desktopIsolationSupported {
-            message = "已找到 Claude Desktop，但当前版本没有可用于隔离启动的官方入口。请更新官方客户端后重新检测。"
+            message = "已找到 Claude，但当前版本没有可用于隔离启动的官方入口。请更新官方客户端后重新检测。"
             return
         }
         guard canPrepare else {
@@ -309,11 +364,14 @@ final class SandboxSession {
             let proxyAtStart = detectedProxy
             let paths = try createSession()
             externalActions.start(exchange: paths.exchange)
-            let copyResult: WorkspaceCopyKind?
+            let copyResult: IsolationProjectCopyKind?
             if let originalProject = paths.originalProject {
                 message = "正在创建项目工作副本。"
                 copyResult = try await Task.detached(priority: .userInitiated) {
-                    try Self.copyProject(from: originalProject, to: paths.layout.workspace)
+                    try IsolationProjectCopier.copy(
+                        from: originalProject,
+                        to: paths.layout.workspace
+                    )
                 }.value
             } else {
                 copyResult = nil
@@ -368,7 +426,7 @@ final class SandboxSession {
                 ? "出口核对有警告，但安全边界已通过；会话按你的选择继续。"
                 : ""
             message = configuration.target == .claudeDesktop
-                ? "文件、系统代理、官方客户端签名和断网边界已验证。\(warningSuffix)下一步可启动官方 Claude Desktop。"
+                ? "文件、系统代理、官方客户端签名和断网边界已验证。\(warningSuffix)下一步可启动官方 Claude。"
                 : "文件、系统代理、中继路径和断网边界已验证。\(warningSuffix)下一步可在终端启动 Claude Code。"
         } catch {
             relay.stop()
@@ -378,9 +436,9 @@ final class SandboxSession {
         }
     }
 
-    func launchClaudeCode(token: String) {
+    func launchClaudeCode(token: String?) {
         guard configuration.target == .claudeCode else {
-            message = "当前会话选择了 Claude Desktop，请使用桌面客户端启动。"
+            message = "当前会话选择了 Claude，请使用桌面客户端启动。"
             return
         }
         guard canLaunchClaude else {
@@ -396,7 +454,7 @@ final class SandboxSession {
             message = "没有找到可用的 Claude Code 命令。请先安装 Claude Code，或在本卡片中选择命令。"
             return
         }
-        let layout = IsolationSessionLayout(root: root)
+        let layout = sessionLayout(root: root)
         guard let exchangePath, let originalProject = configurationPath(configuration.projectPath) else {
             message = "Claude Code 的项目或交换文件夹路径已变化，请重新创建会话。"
             return
@@ -424,7 +482,9 @@ final class SandboxSession {
             )
             guard openTerminal(script: script) else {
                 try? FileManager.default.removeItem(at: script)
-                throw LocalRelayError.socket("无法打开 Terminal。")
+                throw LocalRelayError.socket(
+                    "无法打开 Terminal。请在“隐私与安全性 > 自动化”中允许 Routekeeper 控制“终端”。"
+                )
             }
             claudeRunning = true
             message = phase == .networkPaused
@@ -442,21 +502,21 @@ final class SandboxSession {
             return
         }
         guard canLaunchClaude else {
-            message = "请先通过沙箱自检，再启动 Claude Desktop。"
+            message = "请先通过沙箱自检，再启动 Claude。"
             return
         }
         guard !claudeRunning else {
-            message = "当前沙箱会话中的 Claude Desktop 已在运行。请先结束会话，再重新启动。"
+            message = "当前沙箱会话中的 Claude 已在运行。请先结束会话，再重新启动。"
             return
         }
         guard let installation = desktopInstallation ?? ClaudeDesktopDiscovery.locate() else {
-            message = "没有找到已验证签名的官方 Claude Desktop。请先从 Anthropic 官方渠道安装。"
+            message = "没有找到已验证签名的官方 Claude。请先从 Anthropic 官方渠道安装。"
             return
         }
         if installation.runtimeFamily == .electron,
            !ClaudeDesktopDiscovery.runningBundleIdentifiers().isEmpty {
             desktopAppRunningOutsideSandbox = true
-            message = "检测到 Claude Desktop 已在沙箱外运行。请先完全退出它及其菜单栏进程，再回到本页重新检测并启动，避免普通实例被重新激活。"
+            message = "检测到 Claude 已在沙箱外运行。请先完全退出它及其菜单栏进程，再回到本页重新检测并启动，避免普通实例被重新激活。"
             return
         }
         guard installation.supportsIsolatedLaunch else {
@@ -467,7 +527,7 @@ final class SandboxSession {
             message = "找不到本次沙箱会话目录，请重新创建。"
             return
         }
-        let layout = IsolationSessionLayout(root: root)
+        let layout = sessionLayout(root: root)
         guard let exchangePath else {
             message = "交换文件夹路径已变化，请重新创建会话。"
             return
@@ -511,7 +571,7 @@ final class SandboxSession {
                 terminateClaudeProcesses()
             }
             claudeRunning = false
-            message = "Claude Desktop 未启动：\(error.localizedDescription)"
+            message = "Claude 未启动：\(error.localizedDescription)"
         }
     }
 
@@ -520,15 +580,15 @@ final class SandboxSession {
     @discardableResult
     func submitClaudeLoginLink(_ rawLink: String) -> Bool {
         guard configuration.target == .claudeDesktop else {
-            failClaudeLogin("当前会话不是 Claude Desktop。")
+            failClaudeLogin("当前会话不是 Claude。")
             return false
         }
         guard phase == .running, networkEnabled else {
             failClaudeLogin("请先恢复沙箱网络，再提交登录回调。")
             return false
         }
-        guard claudeRunning, let root = sessionRoot, let identity = recordedProcess(root: root) else {
-            failClaudeLogin("沙箱中的 Claude Desktop 尚未运行，或进程身份已失效。")
+        guard claudeRunning, let root = sessionRoot, let identity = Self.recordedProcess(root: root) else {
+            failClaudeLogin("沙箱中的 Claude 尚未运行，或进程身份已失效。")
             return false
         }
         guard let installation = desktopInstallation,
@@ -554,7 +614,7 @@ final class SandboxSession {
               application.processIdentifier == identity.pid,
               application.bundleURL?.standardizedFileURL.resolvingSymlinksInPath()
                 == installation.appURL.standardizedFileURL.resolvingSymlinksInPath() else {
-            failClaudeLogin("需要且只能有本次沙箱记录的 Claude Desktop 实例在运行。请结束会话后重新启动。")
+            failClaudeLogin("需要且只能有本次沙箱记录的 Claude 实例在运行。请结束会话后重新启动。")
             return false
         }
 
@@ -651,8 +711,8 @@ final class SandboxSession {
                 code: 1,
                 userInfo: [
                     NSLocalizedDescriptionKey: logTail.isEmpty
-                        ? "Claude Desktop 启动后立即退出，请查看会话日志。"
-                        : "Claude Desktop 启动后立即退出。日志末尾：\n\(logTail)"
+                        ? "Claude 启动后立即退出，请查看会话日志。"
+                        : "Claude 启动后立即退出。日志末尾：\n\(logTail)"
                 ]
             )
         }
@@ -665,8 +725,8 @@ final class SandboxSession {
         claudeRunning = true
         desktopAppRunningOutsideSandbox = true
         message = phase == .networkPaused
-            ? "Claude Desktop 已在沙箱中启动；网络当前关闭，恢复网络后才能访问代理。"
-            : "Claude Desktop 已在沙箱中启动；Chat 的内置网页工作区和由本次实例派生的辅助进程会沿用相同的文件与网络限制。启动后仍会持续审计监听地址。"
+            ? "Claude 已在沙箱中启动；网络当前关闭，恢复网络后才能访问代理。"
+            : "Claude 已在沙箱中启动；Chat 的内置网页工作区和由本次实例派生的辅助进程会沿用相同的文件与网络限制。启动后仍会持续审计监听地址。"
         beginProcessChecks(profile: layout.profile)
     }
 
@@ -763,8 +823,8 @@ final class SandboxSession {
                 var ports = Set<Int>()
                 var sawAuditError: String?
                 for _ in 0..<80 {
-                    guard let identity = self.recordedProcess(root: root) else { break }
-                    let pids = [identity.pid] + self.descendants(of: identity.pid)
+                    guard let identity = Self.recordedProcess(root: root) else { break }
+                    let pids = [identity.pid] + Self.descendants(of: identity.pid)
                     let audit = await Task.detached(priority: .userInitiated) {
                         Self.auditLoopbackListeners(pids: pids)
                     }.value
@@ -912,7 +972,7 @@ final class SandboxSession {
             let proxyAtStart = detectedProxy
             let port = try relay.start(upstream: configuration.upstream)
             guard let root = sessionRoot else { throw LocalRelayError.stopped }
-            let layout = IsolationSessionLayout(root: root)
+            let layout = sessionLayout(root: root)
             let project = configurationPath(configuration.projectPath)
             let exchange = URL(fileURLWithPath: exchangePath ?? configuration.exchangePath, isDirectory: true)
             let paths = resolvedPaths(
@@ -1045,7 +1105,7 @@ final class SandboxSession {
             networkValidationInProgress = false
             return
         }
-        let layout = IsolationSessionLayout(root: root)
+        let layout = sessionLayout(root: root)
         let project = configurationPath(configuration.projectPath)
         let exchange = URL(fileURLWithPath: exchangePath ?? configuration.exchangePath, isDirectory: true)
         let paths = resolvedPaths(
@@ -1125,8 +1185,9 @@ final class SandboxSession {
         claudeLoginCallbackStatus = .idle
         claudeLoginCallbackMessage = "不会读取邮箱；请手动粘贴邮件中的 Claude 登录链接。"
         phase = .ended
+        markWorkspaceEnded()
         if let root = sessionRoot {
-            let layout = IsolationSessionLayout(root: root)
+            let layout = sessionLayout(root: root)
             if let project = configurationPath(configuration.projectPath) {
                 await refreshChanges(original: project, workspace: layout.workspace)
             }
@@ -1142,11 +1203,12 @@ final class SandboxSession {
         networkValidationGeneration += 1
         networkValidationInProgress = false
         if let root = sessionRoot { removeOwnedSession(at: root) }
+        markWorkspaceEnded()
         externalActions.clear()
         sessionRoot = nil
+        workspaceContainerRoot = nil
         exchangePath = nil
         activeExecutable = nil
-        claudeCodeInstallation = nil
         desktopProcess = nil
         desktopAppRunningOutsideSandbox = false
         relayPort = nil
@@ -1169,6 +1231,7 @@ final class SandboxSession {
         }
         reset()
         purgeOwnedSessions()
+        purgeOwnedWorkspaces()
         purgeOwnedProfiles()
         configuration = IsolationConfiguration()
         preferences.removeObject(forKey: Self.configurationKey)
@@ -1200,7 +1263,7 @@ final class SandboxSession {
                 try? FileManager.default.removeItem(at: parent)
             }
             persistedClaudeProfileAvailable = false
-            message = "已清除 Claude Desktop 的持久登录数据。下一次启用持久登录时需要重新登录。"
+            message = "已清除 Claude 的持久登录数据。下一次启用持久登录时需要重新登录。"
             return true
         } catch {
             message = "无法清除 Claude 持久登录数据：\(error.localizedDescription)"
@@ -1209,8 +1272,18 @@ final class SandboxSession {
     }
 
     func openWorkspace() {
-        guard let root = sessionRoot else { return }
-        NSWorkspace.shared.open(IsolationSessionLayout(root: root).workspace)
+        guard let workspaceURL, FileManager.default.fileExists(atPath: workspaceURL.path) else { return }
+        NSWorkspace.shared.open(workspaceURL)
+    }
+
+    func revealWorkspace() {
+        guard let workspaceURL, FileManager.default.fileExists(atPath: workspaceURL.path) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([workspaceURL])
+    }
+
+    private func markWorkspaceEnded() {
+        guard let container = workspaceContainerRoot else { return }
+        try? IsolationWorkspaceStore.markEnded(at: container)
     }
 
     private func withDetectedProxyCheck(
@@ -1278,6 +1351,7 @@ final class SandboxSession {
     private func createSession() throws -> IsolationResolvedPaths {
         relay.stop()
         sessionRoot = nil
+        workspaceContainerRoot = nil
         let fileManager = FileManager.default
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         try fileManager.createDirectory(
@@ -1285,7 +1359,8 @@ final class SandboxSession {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        let root = sessionsRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionID = UUID()
+        let root = sessionsRoot.appendingPathComponent(sessionID.uuidString, isDirectory: true)
         try fileManager.createDirectory(
             at: root,
             withIntermediateDirectories: false,
@@ -1295,38 +1370,66 @@ final class SandboxSession {
         try Data("Routekeeper experimental isolation\n".utf8).write(to: marker, options: .atomic)
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
 
-        var paths = try IsolationPathValidator.validate(configuration, sessionRoot: root, home: home)
-        paths.identityHome = try prepareDesktopIdentityHome()
-        if let identityHome = paths.identityHome {
-            for candidate in [paths.originalProject, Optional(paths.exchange)].compactMap({ $0 })
-                where IsolationPathValidator.contains(identityHome, candidate)
-                    || IsolationPathValidator.contains(candidate, identityHome) {
-                throw IsolationValidationError.unsafePath(candidate.path)
+        do {
+            let workspaceContainer = try createWorkspaceContainer(sessionID: sessionID)
+            let workspace = workspaceContainer.appendingPathComponent("workspace", isDirectory: true)
+            var paths = try IsolationPathValidator.validate(
+                configuration,
+                sessionRoot: root,
+                home: home,
+                workspace: workspace
+            )
+            paths.identityHome = try prepareDesktopIdentityHome()
+            if let identityHome = paths.identityHome {
+                for candidate in [paths.originalProject, Optional(paths.exchange)].compactMap({ $0 })
+                    where IsolationPathValidator.contains(identityHome, candidate)
+                        || IsolationPathValidator.contains(candidate, identityHome) {
+                    throw IsolationValidationError.unsafePath(candidate.path)
+                }
             }
-        }
-        for directory in [paths.runtimeHome, paths.layout.temporary, paths.layout.control, paths.layout.logs] {
+            for directory in [paths.runtimeHome, paths.layout.temporary, paths.layout.control, paths.layout.logs] {
+                try fileManager.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            }
+            if paths.originalProject == nil {
+                try fileManager.createDirectory(
+                    at: paths.layout.workspace,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            }
             try fileManager.createDirectory(
-                at: directory,
+                at: paths.runtimeHome.appendingPathComponent(".config"),
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
+            try writeSessionLocalePreferences(home: paths.runtimeHome)
+            sessionRoot = root
+            workspaceContainerRoot = workspaceContainer
+            exchangePath = paths.exchange.path
+            return paths
+        } catch {
+            try? fileManager.removeItem(at: root)
+            if let container = workspaceContainerRoot {
+                try? fileManager.removeItem(at: container)
+            }
+            workspaceContainerRoot = nil
+            throw error
         }
-        if paths.originalProject == nil {
-            try fileManager.createDirectory(
-                at: paths.layout.workspace,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-        }
-        try fileManager.createDirectory(
-            at: paths.runtimeHome.appendingPathComponent(".config"),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
+    }
+
+    private func createWorkspaceContainer(sessionID: UUID) throws -> URL {
+        let workspace = try IsolationWorkspaceStore.create(
+            in: workspacesRoot,
+            sessionID: sessionID,
+            target: configuration.target,
+            projectPath: configuration.projectPath
         )
-        try writeSessionLocalePreferences(home: paths.runtimeHome)
-        sessionRoot = root
-        exchangePath = paths.exchange.path
-        return paths
+        workspaceContainerRoot = workspace.container
+        return workspace.container
     }
 
     private func prepareDesktopIdentityHome() throws -> URL? {
@@ -1353,7 +1456,7 @@ final class SandboxSession {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
-            try Data("Routekeeper persistent Claude Desktop profile\n".utf8)
+            try Data("Routekeeper persistent Claude profile\n".utf8)
                 .write(to: marker, options: .atomic)
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
         }
@@ -1379,7 +1482,7 @@ final class SandboxSession {
     }
 
     private func makeLaunchScript(
-        token: String,
+        token: String?,
         executable: URL,
         profile: URL,
         layout: IsolationSessionLayout,
@@ -1411,11 +1514,13 @@ final class SandboxSession {
             "AppleLocale=\(appleLocale)",
             "PATH=\(path)",
             "TERM=xterm-256color",
-            "CLAUDE_CODE_OAUTH_TOKEN=\(token)",
             "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
             "NODE_USE_ENV_PROXY=1",
             "ISOLATION_EXCHANGE=\(exchange.path)"
         ]
+        if let token, !token.isEmpty {
+            exports.append("CLAUDE_CODE_OAUTH_TOKEN=\(token)")
+        }
         exports += environment.keys.sorted().map { "\($0)=\(environment[$0] ?? "")" }
         let lines = [
             "#!/bin/zsh",
@@ -1467,26 +1572,27 @@ final class SandboxSession {
                 let root = IsolationSessionLayout(
                     root: profile.deletingLastPathComponent().deletingLastPathComponent()
                 ).root
-                guard let identity = self.recordedProcess(root: root) else {
+                guard !Task.isCancelled, self.phase.isActive else { return }
+                guard let identity = Self.recordedProcess(root: root) else {
                     self.desktopProcess = nil
                     self.desktopAppRunningOutsideSandbox = false
                     if self.claudeRunning { self.claudeRunning = false }
                     return
                 }
                 if self.configuration.target == .claudeDesktop {
-                    let pids = [identity.pid] + self.descendants(of: identity.pid)
+                    let pids = [identity.pid] + Self.descendants(of: identity.pid)
                     let audit = await Task.detached(priority: .userInitiated) {
                         Self.auditLoopbackListeners(pids: pids)
                     }.value
                     if let error = audit.error {
                         self.failListenerAudit(
-                            "无法核验 Claude Desktop 的 TCP 监听地址，已按失败关闭策略终止会话：\(error)"
+                            "无法核验 Claude 的 TCP 监听地址，已按失败关闭策略终止会话：\(error)"
                         )
                         return
                     }
                     if !audit.nonLoopback.isEmpty {
                         self.failListenerAudit(
-                            "检测到受限 Claude Desktop 在非回环地址监听 TCP：\(audit.nonLoopback.joined(separator: "；"))。会话已终止。"
+                            "检测到受限 Claude 在非回环地址监听 TCP：\(audit.nonLoopback.joined(separator: "；"))。会话已终止。"
                         )
                         return
                     }
@@ -1497,8 +1603,8 @@ final class SandboxSession {
                         detail: "当前 Claude 进程树的 TCP 监听均限于 127.0.0.1 或 ::1"
                     )
                 }
+                guard !Task.isCancelled, self.phase.isActive else { return }
                 if !self.claudeRunning { self.claudeRunning = true }
-                guard self.phase.isActive else { return }
             }
         }
     }
@@ -1537,18 +1643,18 @@ final class SandboxSession {
             desktopAppRunningOutsideSandbox = false
         }
         guard let root = sessionRoot else { return }
-        let profile = IsolationSessionLayout(root: root).profile.path
+        let profile = sessionLayout(root: root).profile.path
         var trackedPIDs = Set<Int32>()
-        if let identity = recordedProcess(root: root) {
+        if let identity = Self.recordedProcess(root: root) {
             trackedPIDs.insert(identity.pid)
-            trackedPIDs.formUnion(descendants(of: identity.pid))
+            trackedPIDs.formUnion(Self.descendants(of: identity.pid))
         }
         if let desktopProcess { trackedPIDs.insert(desktopProcess.processIdentifier) }
         for pid in trackedPIDs { _ = Darwin.kill(pid, SIGTERM) }
         _ = Command.run("/usr/bin/pkill", ["-TERM", "-f", profile], timeout: 4)
         Thread.sleep(forTimeInterval: 0.45)
-        if let identity = recordedProcess(root: root) {
-            trackedPIDs.formUnion(descendants(of: identity.pid))
+        if let identity = Self.recordedProcess(root: root) {
+            trackedPIDs.formUnion(Self.descendants(of: identity.pid))
         }
         for pid in trackedPIDs where Darwin.kill(pid, 0) == 0 {
             _ = Darwin.kill(pid, SIGKILL)
@@ -1582,7 +1688,12 @@ final class SandboxSession {
         let locale = IsolationSessionEnvironment.posixLocale(for: language)
         let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: language)
         let appleLocale = locale.replacingOccurrences(of: ".UTF-8", with: "")
-        return ["-AppleLanguages", "(\(appleLanguage))", "-AppleLocale", appleLocale]
+        return [
+            "-AppleLanguages", "(\(appleLanguage))",
+            "-AppleLocale", appleLocale,
+            "--lang=\(appleLanguage)",
+            "--accept-lang=\(IsolationSessionEnvironment.acceptLanguage(for: language))"
+        ]
     }
 
     nonisolated static func desktopEnvironment(
@@ -1666,14 +1777,14 @@ final class SandboxSession {
         executableURL: URL,
         root: URL
     ) throws {
-        let control = IsolationSessionLayout(root: root).control
+        let control = sessionLayout(root: root).control
         let process = Command.run("/bin/ps", ["-p", String(pid), "-o", "lstart="], timeout: 2)
         let start = process.output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard process.status == 0, !start.isEmpty else {
             throw NSError(
                 domain: "Routekeeper.Desktop",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "无法记录 Claude Desktop 的进程身份。"]
+                userInfo: [NSLocalizedDescriptionKey: "无法记录 Claude 的进程身份。"]
             )
         }
         try writePrivate(Data("\(pid)\n".utf8), to: control.appendingPathComponent("sandbox.pid"))
@@ -1723,7 +1834,19 @@ final class SandboxSession {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func recoverOrphanedSessions() {
+    nonisolated private static func locateApplications(manualCodePath: String?) -> (
+        desktop: ClaudeDesktopInstallation?,
+        code: ClaudeCodeInstallation?,
+        desktopIsRunning: Bool
+    ) {
+        (
+            ClaudeDesktopDiscovery.locate(),
+            ClaudeCodeDiscovery.locate(manualPath: manualCodePath),
+            !ClaudeDesktopDiscovery.runningBundleIdentifiers().isEmpty
+        )
+    }
+
+    nonisolated private static func recoverOrphanedSessions(in sessionsRoot: URL) {
         guard let roots = try? FileManager.default.contentsOfDirectory(
             at: sessionsRoot,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -1738,17 +1861,17 @@ final class SandboxSession {
             let expectedExecutable = executableText?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".routekeeper-session").path),
-                  let identity = recordedProcess(root: root),
+                  let identity = Self.recordedProcess(root: root),
                   identity.command.contains(IsolationSessionLayout(root: root).profile.path)
                     || expectedExecutable.map({ !$0.isEmpty && identity.command.contains($0) }) == true else {
                 continue
             }
-            for pid in descendants(of: identity.pid).reversed() {
+            for pid in Self.descendants(of: identity.pid).reversed() {
                 _ = Darwin.kill(pid, SIGTERM)
             }
             _ = Darwin.kill(identity.pid, SIGTERM)
             Thread.sleep(forTimeInterval: 0.2)
-            for pid in [identity.pid] + descendants(of: identity.pid) where Darwin.kill(pid, 0) == 0 {
+            for pid in [identity.pid] + Self.descendants(of: identity.pid) where Darwin.kill(pid, 0) == 0 {
                 _ = Darwin.kill(pid, SIGKILL)
             }
             try? FileManager.default.removeItem(at: root.appendingPathComponent("control/sandbox.pid"))
@@ -1773,6 +1896,61 @@ final class SandboxSession {
            remaining.isEmpty {
             try? FileManager.default.removeItem(at: sessionsRoot)
         }
+    }
+
+    private func purgeOwnedWorkspaces() {
+        let fileManager = FileManager.default
+        guard let projects = try? fileManager.contentsOfDirectory(
+            at: workspacesRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for projectURL in projects {
+            guard let projectValues = try? projectURL.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            ),
+            projectValues.isDirectory == true,
+            projectValues.isSymbolicLink != true,
+            projectURL.deletingLastPathComponent().standardizedFileURL == workspacesRoot.standardizedFileURL,
+            let sessions = try? fileManager.contentsOfDirectory(
+                at: projectURL,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for sessionURL in sessions {
+                guard let values = try? sessionURL.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+                ),
+                values.isDirectory == true,
+                values.isSymbolicLink != true,
+                sessionURL.deletingLastPathComponent().standardizedFileURL == projectURL.standardizedFileURL,
+                Self.hasOwnedWorkspaceMarker(at: sessionURL) else {
+                    continue
+                }
+                try? fileManager.removeItem(at: sessionURL)
+            }
+            if let remaining = try? fileManager.contentsOfDirectory(atPath: projectURL.path),
+               remaining.isEmpty {
+                try? fileManager.removeItem(at: projectURL)
+            }
+        }
+        if let remaining = try? fileManager.contentsOfDirectory(atPath: workspacesRoot.path),
+           remaining.isEmpty {
+            try? fileManager.removeItem(at: workspacesRoot)
+        }
+    }
+
+    private nonisolated static func hasOwnedWorkspaceMarker(at container: URL) -> Bool {
+        let marker = container.appendingPathComponent(IsolationWorkspaceMarker.fileName)
+        guard let data = try? Data(contentsOf: marker),
+              let decoded = try? IsolationWorkspaceCoding.decodeMarker(data) else {
+            return false
+        }
+        return decoded.version == 1
     }
 
     private func purgeOwnedProfiles() {
@@ -1858,7 +2036,7 @@ final class SandboxSession {
         )
     }
 
-    private func recordedProcess(root: URL) -> RecordedProcess? {
+    nonisolated private static func recordedProcess(root: URL) -> RecordedProcess? {
         let control = IsolationSessionLayout(root: root).control
         let pidText = try? String(contentsOf: control.appendingPathComponent("sandbox.pid"), encoding: .utf8)
         let startText = try? String(contentsOf: control.appendingPathComponent("sandbox.started"), encoding: .utf8)
@@ -1889,7 +2067,7 @@ final class SandboxSession {
         return RecordedProcess(pid: pid, command: line)
     }
 
-    private func descendants(of rootPID: Int32) -> [Int32] {
+    nonisolated private static func descendants(of rootPID: Int32) -> [Int32] {
         let result = Command.run("/bin/ps", ["-axo", "pid=,ppid="], timeout: 2)
         guard result.status == 0 else { return [] }
         let parentByChild = result.output.split(separator: "\n").reduce(into: [Int32: Int32]()) { values, line in
@@ -1919,14 +2097,6 @@ final class SandboxSession {
         return port
     }
 
-    nonisolated private static func copyProject(from source: URL, to destination: URL) throws -> WorkspaceCopyKind {
-        if copyfile(source.path, destination.path, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_CLONE)) == 0 {
-            return .clone
-        }
-        try FileManager.default.copyItem(at: source, to: destination)
-        return .copy
-    }
-
     nonisolated private static func runPreflight(
         configuration: IsolationConfiguration,
         paths: IsolationResolvedPaths,
@@ -1945,12 +2115,12 @@ final class SandboxSession {
                         .init(
                             id: "desktop-signature",
                             title: "官方客户端签名",
-                            detail: "预检时没有可用的官方 Claude Desktop",
+                            detail: "预检时没有可用的官方 Claude",
                             passed: false
                         )
                     ],
                     executable: executable,
-                    failure: "官方 Claude Desktop 在预检前不可用。",
+                    failure: "官方 Claude 在预检前不可用。",
                     relayReachable: false,
                     exitAnchor: nil
                 )
@@ -2218,11 +2388,6 @@ final class SandboxSession {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n") + "\""
     }
-}
-
-private enum WorkspaceCopyKind {
-    case clone
-    case copy
 }
 
 private struct PreflightResult {

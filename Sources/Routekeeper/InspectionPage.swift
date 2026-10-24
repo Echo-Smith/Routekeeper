@@ -563,8 +563,8 @@ struct InspectionPage: View {
             switch presentation.primaryIssue {
             case .gateway:
                 return text(
-                    "代理网关验证尚未完成；按下方下一步继续，详细流程见问号帮助。",
-                    "Gateway verification is incomplete. Continue with the next step below, or open Help for the full flow."
+                    "详细流程请点击问号查看。",
+                    "Open Help for the full verification flow."
                 )
             case .check:
                 if unresolvedChecks.count > 1 {
@@ -750,27 +750,23 @@ struct InspectionPage: View {
         guard let report = audit.report else { return [] }
 
         var rows: [CheckItem] = []
-        let findings = report.assessment.findings.map(\.localizedDescription)
+        let findings = report.assessment.findings.map(\.conciseDescription)
         let assessmentDetail: String
         let assessmentLevel: CheckLevel
         switch report.assessment.level {
         case .clear:
             assessmentLevel = .passed
-            assessmentDetail = text(
-                "系统与代理出口、服务可达性和本地网络路径未发现明显冲突。",
-                "No obvious conflict was found across exits, service reachability or local network paths."
-            )
+            assessmentDetail = text("未发现明显冲突。", "No obvious conflict found.")
         case .attention:
             assessmentLevel = .warning
             assessmentDetail = findings.isEmpty
-                ? text("出口体检发现需要核对的项目。", "The egress check found items to review.")
-                : findings.prefix(3).joined(separator: "；")
+                ? text("有项目需要核对。", "Items need review.")
+                : conciseFindings(findings)
         case .insufficient:
             assessmentLevel = .unknown
             assessmentDetail = findings.isEmpty
-                ? text("部分出口证据不足；缺失结果不会被当作通过。",
-                       "Some exit evidence is incomplete; missing results are not treated as a pass.")
-                : findings.prefix(3).joined(separator: "；")
+                ? text("证据不足。", "Insufficient evidence.")
+                : conciseFindings(findings)
         }
         rows.append(CheckItem(
             "egress-audit",
@@ -793,9 +789,9 @@ struct InspectionPage: View {
                 : reached == 0 ? .failed : .warning
             rows.append(CheckItem(
                 "egress-service",
-                text("Claude 服务可达性", "Claude service reachability"),
-                text("\(reached)/\(report.services.count) 条 HTTPS/TLS 探测完成连接。",
-                     "\(reached)/\(report.services.count) HTTPS/TLS probes reached the service."),
+                text("经当前路径访问 Claude", "Claude through current path"),
+                text("\(reached)/\(report.services.count) 项连接成功。",
+                     "\(reached)/\(report.services.count) probes connected."),
                 level
             ))
         }
@@ -810,6 +806,19 @@ struct InspectionPage: View {
             ))
         }
         return rows
+    }
+
+    private func conciseFindings(_ findings: [String]) -> String {
+        let punctuation = CharacterSet(charactersIn: "。；;，,")
+        let normalized = findings.prefix(2).compactMap { finding -> String? in
+            let value = finding
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: punctuation)
+            return value.isEmpty ? nil : value
+        }
+        return normalized.isEmpty
+            ? text("有项目需要核对。", "Items need review.")
+            : normalized.joined(separator: " · ")
     }
 
     private func ipv6CheckSummary(_ report: IPv6EgressReport) -> (String, CheckLevel) {

@@ -61,13 +61,13 @@ enum ExternalExitChecks {
         settings: GuardSettings
     ) -> CheckItem {
         guard let ip = probe.ip else {
-            return .init(id, title, "\(service) 没有返回有效 IP；请检查网络或代理后重新检测", .failed)
+            return .init(id, title, "\(service) 未返回有效 IP，请检查网络或代理。", .failed)
         }
         guard let target = settings.target(for: IPFamily.of(ip)) else {
             return .init(
                 id,
                 title,
-                "\(service) 返回 \(ip)；该地址族的固定出口尚未设置，暂时无法判断",
+                "\(service) 返回 \(ip)，当前地址族未设置固定出口。",
                 .unknown
             )
         }
@@ -75,8 +75,8 @@ enum ExternalExitChecks {
             id,
             title,
             ip == target
-                ? "\(service) 返回 \(ip)，与固定出口一致"
-                : "\(service) 返回 \(ip)，与固定出口 \(target) 不一致",
+                ? "\(service) 返回 \(ip)，与固定出口一致。"
+                : "\(service) 返回 \(ip)，与固定出口 \(target) 不一致。",
             ip == target ? .passed : .failed
         )
     }

@@ -28,6 +28,7 @@ final class SandboxCoordinator {
     init(
         preferences: UserDefaults = .standard,
         sessionsRoot: URL? = nil,
+        workspacesRoot: URL? = nil,
         profilesRoot: URL? = nil,
         installedTargets: Set<IsolationApplicationTarget>? = nil
     ) {
@@ -38,6 +39,7 @@ final class SandboxCoordinator {
         codeSession = SandboxSession(
             preferences: preferences,
             sessionsRoot: sessionsRoot,
+            workspacesRoot: workspacesRoot,
             profilesRoot: profilesRoot,
             initialConfiguration: loaded.configuration.configuration(for: .claudeCode),
             persistsConfiguration: false
@@ -45,6 +47,7 @@ final class SandboxCoordinator {
         desktopSession = SandboxSession(
             preferences: preferences,
             sessionsRoot: sessionsRoot,
+            workspacesRoot: workspacesRoot,
             profilesRoot: profilesRoot,
             initialConfiguration: loaded.configuration.configuration(for: .claudeDesktop),
             persistsConfiguration: false
@@ -116,6 +119,10 @@ final class SandboxCoordinator {
         desktopSession.cleanupProfilesRoot
     }
 
+    var cleanupWorkspacesRoot: URL {
+        codeSession.cleanupWorkspacesRoot
+    }
+
     var currentSessionRoots: Set<URL> {
         Set(sessions.compactMap(\.sessionRoot))
     }
@@ -179,7 +186,7 @@ final class SandboxCoordinator {
         if phase == .disabled {
             if enabledSessions.isEmpty {
                 if webBrowser.installation != nil {
-                    return text("Claude 网页版可独立使用", "Claude on the web is available")
+                    return text("Chrome 可独立使用", "Chrome is available")
                 }
                 return hasDetectedInstallation
                     ? text("选择要保护的应用", "Choose a protected app")
@@ -213,8 +220,8 @@ final class SandboxCoordinator {
             if enabledSessions.isEmpty {
                 if webBrowser.installation != nil {
                     return text(
-                        "未检测到 Claude 客户端；仍可在独立的官方 Chrome 配置中打开 Claude 网页版。",
-                        "No Claude client was detected. Claude on the web can still open in a dedicated official Chrome profile."
+                        "未检测到 Claude 客户端；仍可在独立的官方 Chrome 配置中访问 Claude。",
+                        "No Claude client was detected. Chrome can still open in a dedicated official Chrome profile."
                     )
                 }
                 return hasDetectedInstallation
@@ -223,8 +230,8 @@ final class SandboxCoordinator {
                         "An existing Claude app was detected. Enable at least one protected target to continue."
                     )
                     : text(
-                        "未检测到 Claude Code、Claude Desktop 或 Google Chrome。普通网络保护仍可使用；安装后可回到本页重新检测。",
-                        "Claude Code, Claude Desktop and Google Chrome were not detected. Regular network protection still works; return here to detect them after installation."
+                        "未检测到 Claude Code、Claude 或 Google Chrome。普通网络保护仍可使用；安装后可回到本页重新检测。",
+                        "Claude Code, Claude and Google Chrome were not detected. Regular network protection still works; return here to detect them after installation."
                     )
             }
             return text(
@@ -254,10 +261,12 @@ final class SandboxCoordinator {
     func setTarget(_ target: IsolationApplicationTarget, enabled: Bool) -> Bool {
         let session = session(for: target)
         guard !session.phase.isActive, !session.busy else { return false }
-        if enabled {
-            session.refreshInstalledApplications()
-        }
         let wasDisabled = session.phase == .disabled
+        if enabled,
+           session.claudeCodeInstallation == nil,
+           session.desktopInstallation == nil {
+            Task { await session.loadInstalledApplicationsIfNeeded() }
+        }
         var updated = sharedConfiguration
         if enabled {
             updated.enabledTargets.insert(target)
@@ -302,6 +311,8 @@ final class SandboxCoordinator {
     ) async {
         let session = session(for: target)
         guard sharedConfiguration.isEnabled(target), session.phase != .disabled else { return }
+        // Take a fresh shared snapshot at the launch boundary, not only on UI edits.
+        applyConfigurationToSessions()
         do {
             let destination = try targetExchangeURL(for: target)
             try FileManager.default.createDirectory(
@@ -403,6 +414,70 @@ final class SandboxCoordinator {
         persistConfiguration()
         webBrowser.sharedConfigurationDidChange(sharedConfiguration)
         synchronizeSessions()
+    }
+
+    func updateTimezoneIdentifier(_ value: String) {
+        sharedConfiguration.usesEgressRegionalDefaults = false
+        sharedConfiguration.timezoneIdentifier = value
+    }
+
+    func updateLanguageIdentifier(_ value: String) {
+        sharedConfiguration.usesEgressRegionalDefaults = false
+        sharedConfiguration.languageIdentifier = value
+    }
+
+    func applyEgressRegionalDefaults(from report: EgressAuditReport?) {
+        guard sharedConfiguration.usesEgressRegionalDefaults, !anyActive, !busy,
+              let report else { return }
+        let intelligence = report.primaryIP.flatMap { primaryIP in
+            report.intelligence.first { $0.ip == primaryIP }
+        } ?? report.intelligence.first
+        guard let timezone = intelligence?.timezone,
+              TimeZone(identifier: timezone) != nil else { return }
+        var updated = sharedConfiguration
+        updated.timezoneIdentifier = timezone
+        if let countryCode = intelligence?.countryCode,
+           let language = IsolationSessionEnvironment.defaultLanguageIdentifier(
+            forCountryCode: countryCode
+           ) {
+            updated.languageIdentifier = language
+        }
+        sharedConfiguration = updated
+    }
+
+    @discardableResult
+    func repairRegionalSettings(from report: EgressAuditReport?) -> Bool {
+        guard !anyActive, !busy else { return false }
+        let intelligence = report?.primaryIP.flatMap { primaryIP in
+            report?.intelligence.first { $0.ip == primaryIP }
+        } ?? report?.intelligence.first
+        let egressTimezone = intelligence?.timezone.flatMap { value in
+            TimeZone(identifier: value) == nil ? nil : value
+        }
+        var updated = sharedConfiguration
+        var didRepair = false
+        if TimeZone(identifier: updated.timezoneIdentifier) == nil {
+            updated.timezoneIdentifier = egressTimezone ?? TimeZone.current.identifier
+            didRepair = true
+        }
+        if IsolationSessionEnvironment.normalizedLanguageIdentifier(
+            updated.languageIdentifier
+        ) == nil {
+            let countryLanguage = intelligence?.countryCode.flatMap {
+                IsolationSessionEnvironment.defaultLanguageIdentifier(forCountryCode: $0)
+            }
+            updated.languageIdentifier = countryLanguage
+                ?? IsolationSessionEnvironment.defaultLanguageIdentifier(
+                    for: updated.timezoneIdentifier
+                )
+            didRepair = true
+        }
+        if egressTimezone != nil {
+            updated.usesEgressRegionalDefaults = true
+        }
+        guard didRepair else { return false }
+        sharedConfiguration = updated
+        return true
     }
 
     private func installConfigurationCallbacks() {

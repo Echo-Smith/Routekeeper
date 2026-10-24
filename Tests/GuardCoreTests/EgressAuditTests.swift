@@ -44,11 +44,11 @@ final class EgressAuditTests: XCTestCase {
           "country_code": "US",
           "region": "California",
           "city": "Los Angeles",
-          "connection": {"asn": 400951, "org": "Akari Networks LLC", "isp": "Akari Networks LLC"},
+          "connection": {"asn": 64500, "org": "Example Network", "isp": "Example Network"},
           "timezone": {"id": "America/Los_Angeles"}
         }
         """.utf8)))
-        XCTAssertEqual(who.asn, "AS400951")
+        XCTAssertEqual(who.asn, "AS64500")
         XCTAssertEqual(who.countryCode, "US")
         XCTAssertEqual(who.city, "Los Angeles")
 
@@ -61,8 +61,8 @@ final class EgressAuditTests: XCTestCase {
           "is_tor": false,
           "is_abuser": false,
           "is_crawler": false,
-          "asn": {"asn": 400951, "org": "Akari Networks LLC"},
-          "company": {"name": "Akari Networks LLC"},
+          "asn": {"asn": 64500, "org": "Example Network"},
+          "company": {"name": "Example Network"},
           "location": {"country": "United States", "country_code": "US", "city": "Los Angeles"}
         }
         """.utf8)))
@@ -276,7 +276,7 @@ final class EgressAuditTests: XCTestCase {
             ],
             intelligence: [
                 .init(ip: "203.0.113.13", sources: ["ipwho.is"], countryCode: "US",
-                      timezone: "America/Los_Angeles", asn: "AS400951", isDatacenter: true)
+                      timezone: "America/Los_Angeles", asn: "AS64500", isDatacenter: true)
             ],
             intelligenceStatus: .available,
             assessment: .init(level: .attention, findings: [.datacenterNetwork]),
@@ -305,7 +305,7 @@ final class EgressAuditTests: XCTestCase {
         )
         let history = [
             EgressHistoryEntry(
-                capturedAt: now, ip: "203.0.113.13", asn: "AS400951",
+                capturedAt: now, ip: "203.0.113.13", asn: "AS64500",
                 countryCode: "US", city: "Los Angeles", sources: ["ipwho.is"]
             )
         ]

@@ -157,8 +157,8 @@ struct ProxyModeConfigurationSheet: View {
             )
         case .claudeOnly:
             return text(
-                "优先使用进程或应用分流，把 Claude Desktop 和 Claude Code 固定到只包含海外节点的代理组。终端中的 Claude Code 还需要 TUN 或可识别进程的规则；最终兜底不能包含 DIRECT。",
-                "Prefer process or application rules. Put Claude Desktop and Claude Code into a proxy group containing only overseas nodes. Claude Code in Terminal also needs TUN or process-aware rules, and the final fallback must not contain DIRECT."
+                "优先使用进程或应用分流，把 Claude 和 Claude Code 固定到只包含海外节点的代理组。终端中的 Claude Code 还需要 TUN 或可识别进程的规则；最终兜底不能包含 DIRECT。",
+                "Prefer process or application rules. Put Claude and Claude Code into a proxy group containing only overseas nodes. Claude Code in Terminal also needs TUN or process-aware rules, and the final fallback must not contain DIRECT."
             )
         case .off:
             return ""

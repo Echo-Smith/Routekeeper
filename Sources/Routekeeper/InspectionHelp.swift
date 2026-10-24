@@ -78,9 +78,9 @@ enum RoutekeeperHelpSection: String, CaseIterable, Identifiable {
         case .sandboxOverview:
             return en ? "Isolation model" : "隔离模型与限制"
         case .sandboxTargets:
-            return en ? "Protection scope" : "保护范围与独立会话"
+            return en ? "Three cards and independent runtimes" : "三张卡片与独立运行"
         case .sandboxWeb:
-            return en ? "Claude on the web" : "Claude 网页版"
+            return en ? "Chrome isolation" : "Chrome 隔离浏览"
         case .sandboxPaths:
             return en ? "Folders and workspaces" : "目录与工作副本"
         case .sandboxNetwork:
@@ -124,7 +124,7 @@ enum RoutekeeperHelpSection: String, CaseIterable, Identifiable {
         case .sandboxOverview:
             return en ? "What is isolated and what is not" : "隔离什么，不隔离什么"
         case .sandboxTargets:
-            return en ? "Shared settings and separate runtimes" : "共享基础设置，独立运行状态"
+            return en ? "Shared environment in the menu, separate states" : "共享环境在菜单中，运行状态彼此独立"
         case .sandboxWeb:
             return en ? "Dedicated Chrome profile and native sandbox" : "独立 Chrome 配置与原生沙箱"
         case .sandboxPaths:
@@ -134,9 +134,9 @@ enum RoutekeeperHelpSection: String, CaseIterable, Identifiable {
         case .sandboxSessions:
             return en ? "Prepare and launch each target independently" : "分别准备并启动每个目标"
         case .sandboxStatus:
-            return en ? "Green, yellow, red and blocked actions" : "绿色、黄色、红色与不可用操作"
+            return en ? "Action colors and blocked states" : "动作颜色与不可用状态"
         case .authentication:
-            return en ? "Claude Code and Desktop sign-in" : "Claude Code 与 Desktop 登录"
+            return en ? "Claude Code and Claude sign-in" : "Claude Code 与 Claude 登录"
         case .activity:
             return en ? "Recent local events" : "最近的本地事件"
         case .cleanup:
@@ -359,8 +359,8 @@ struct RoutekeeperHelpView: View {
             ])
             helpCallout(
                 text(
-                    "Claude Code 登录凭证只影响 Claude Code 隔离会话；Claude Desktop 登录由独立数据管理。两者都不会写入项目、运行记录或体检报告。",
-                    "The Claude Code credential affects isolated Claude Code sessions only. Claude Desktop sign-in uses a separate profile. Neither is written to projects, activity or check reports."
+                    "Claude Code 登录凭证只影响 Claude Code 隔离会话；Claude 登录由独立数据管理。两者都不会写入项目、运行记录或体检报告。",
+                    "The Claude Code credential affects isolated Claude Code sessions only. Claude sign-in uses a separate profile. Neither is written to projects, activity or check reports."
                 ),
                 symbol: "key"
             )
@@ -386,8 +386,8 @@ struct RoutekeeperHelpView: View {
             helpFeatureRow(
                 title: text("保护范围", "Protection scope"),
                 detail: text(
-                    "查看 Claude Desktop、Claude Code 的监控状态，并跳转到保护范围与异常动作设置。",
-                    "Review monitoring for Claude Desktop and Claude Code, and open protection scope and incident handling."
+                    "查看 Claude、Claude Code 的监控状态，并跳转到保护范围与异常动作设置。",
+                    "Review monitoring for Claude and Claude Code, and open protection scope and incident handling."
                 ),
                 symbol: "shield.lefthalf.filled"
             )
@@ -427,8 +427,8 @@ struct RoutekeeperHelpView: View {
             )
             helpSteps([
                 text(
-                    "在“保护范围”中启用需要监控的 Claude Desktop 或 Claude Code。",
-                    "Enable Claude Desktop or Claude Code in Protection scope."
+                    "在“保护范围”中启用需要监控的 Claude 或 Claude Code。",
+                    "Enable Claude or Claude Code in Protection scope."
                 ),
                 text(
                     "使用“自动获取出口”或手动填写 IPv4、IPv6 固定出口。",
@@ -452,8 +452,15 @@ struct RoutekeeperHelpView: View {
             )
             helpCallout(
                 text(
-                    "Routekeeper 经本机中继访问代理时，FlClash 等客户端看到的进程是 Routekeeper，不是 Chrome 或 Claude。只写 Chrome 进程规则并不足够；应为 claude.ai、api.anthropic.com 和实际使用的 Anthropic/Claude 域名设置代理组规则。TUN 的虚拟网卡是流量入口，“出站网卡”应保持自动或物理网卡，不要填写客户端自己创建的 utun。",
-                    "When Routekeeper reaches a proxy through its local relay, clients such as FlClash see Routekeeper rather than Chrome or Claude. A Chrome process rule is not sufficient. Add proxy-group rules for claude.ai, api.anthropic.com and the Anthropic/Claude domains actually in use. The TUN virtual interface is an ingress path; Outbound interface should remain automatic or use a physical interface, never the client's own utun."
+                    "当前正式构建使用 ad-hoc 签名，macOS Network Extension 系统过滤无法启用。功能代码仍然保留，但界面不显示入口。请在代理客户端中按进程或 Claude 域名配置分流，或选择“仅限制 Claude”。",
+                    "The current release is ad-hoc signed, so the macOS Network Extension system filter cannot be enabled. The feature remains in the codebase but has no UI entry. Use process- or Claude-domain rules in the proxy client, or select Claude only."
+                ),
+                symbol: "signature"
+            )
+            helpCallout(
+                text(
+                    "Routekeeper 经本机中继访问代理时，当前代理看到的进程是 Routekeeper，不是 Chrome 或 Claude。只写 Chrome 进程规则并不足够；应为 claude.ai、api.anthropic.com 和实际使用的 Anthropic/Claude 域名设置代理组规则。TUN 的虚拟网卡是流量入口，“出站网卡”应保持自动或物理网卡，不要填写代理自己创建的 utun。",
+                    "When Routekeeper reaches a proxy through its local relay, the current proxy sees Routekeeper rather than Chrome or Claude. A Chrome process rule is not sufficient. Add proxy-group rules for claude.ai, api.anthropic.com and the Anthropic/Claude domains actually in use. The TUN virtual interface is an ingress path; Outbound interface should remain automatic or use a physical interface, never the proxy's own utun."
                 ),
                 symbol: "network"
             )
@@ -464,8 +471,8 @@ struct RoutekeeperHelpView: View {
         VStack(alignment: .leading, spacing: 18) {
             helpParagraph(
                 text(
-                    "“登录凭证”管理 Claude Code 的钥匙串凭证，以及 Claude Desktop 在隔离会话中的独立登录数据。两类登录互不共享。",
-                    "Claude sign-in manages the Claude Code Keychain credential and Claude Desktop sign-in data for isolated sessions. The two sign-ins are never shared."
+                    "“登录凭证”管理 Claude Code 的钥匙串凭证，以及 Claude 在隔离会话中的独立登录数据。两类登录互不共享。",
+                    "Claude sign-in manages the Claude Code Keychain credential and Claude sign-in data for isolated sessions. The two sign-ins are never shared."
                 )
             )
             helpSteps([
@@ -482,14 +489,14 @@ struct RoutekeeperHelpView: View {
                     "Acquire a new credential only after Claude Code reports that the current one expired. A saved credential can be reused."
                 ),
                 text(
-                    "Claude Desktop 的“保留登录状态”使用独立登录数据；可在同一页清除。",
-                    "Keep Desktop sign-in uses a separate profile. You can clear that data from the same page."
+                    "Claude 的“保留登录状态”使用独立登录数据；可在同一页清除。",
+                    "Keep Claude sign-in uses a separate profile. You can clear that data from the same page."
                 )
             ])
             helpCallout(
                 text(
-                    "凭证不会写入项目、日志、交换目录或体检报告。不要把登录凭证粘贴到对话、代码或普通文本文件。",
-                    "Credentials are never written to projects, logs, exchange folders or check reports. Do not paste a token into chats, code or ordinary text files."
+                    "Claude Code 凭证只用于 Routekeeper 启动的 Claude Code，不用于其他网站或系统账户，也不会写入项目、日志、交换目录或体检报告。不要把登录凭证粘贴到对话、代码或普通文本文件。",
+                    "The Claude Code credential is used only by Claude Code launched through Routekeeper, never for other websites or system accounts, and is never written to projects, logs, exchange folders or check reports. Do not paste a token into chats, code or ordinary text files."
                 ),
                 symbol: "key.horizontal"
             )
@@ -628,6 +635,13 @@ struct RoutekeeperHelpView: View {
                 detail: text(
                     "先查看共享准备和目标卡片：目录不能重叠，系统代理必须是本机回环入口，固定出口与登录状态必须就绪。",
                     "Review shared readiness and the target card: folders cannot overlap, the system proxy must expose a loopback endpoint, and fixed exit plus sign-in must be ready."
+                )
+            )
+            helpFAQRow(
+                title: text("打开或操作其他 App 时要求 macOS 授权", "macOS asks for authorization when opening or operating another app"),
+                detail: text(
+                    "在“隐私与安全性 > 自动化”中允许 Routekeeper 控制“终端”。沙箱页会打开这个设置并自动重新检查授权状态。",
+                    "Under Automation, allow Routekeeper to control Terminal. The sandbox page opens this exact setting and checks it again automatically; closing the window is not a restart."
                 )
             )
             helpFAQRow(
@@ -820,6 +834,27 @@ struct RoutekeeperHelpView: View {
                     "The experimental sandbox reuses fixed exits, proxy-client detection and gateway evidence from regular network protection, but the two are not two strengths of the same switch. Regular protection does not take over how Claude starts; the sandbox adds an execution boundary when a session starts. Unconfirmed gateway or exit evidence is shown as a warning and the user decides whether to continue. Seatbelt file boundaries, local-relay reachability, direct-connection blocking and fail-closed networking remain hard requirements."
                 )
             )
+            helpCallout(
+                text(
+                    "沙箱首次在“终端”中创建会话时，macOS 可能在“隐私与安全性 > 自动化”中要求允许 Routekeeper。请按系统提示完成授权，沙箱页会自动重新检查，授权卡片随后消失。",
+                    "The first time the sandbox opens Terminal, macOS may ask you to allow Routekeeper under Privacy & Security > Automation. Follow the system prompt, then use the macOS authorization card on the Sandbox page to open that setting and check again."
+                ),
+                symbol: "hand.raised.fill"
+            )
+            helpSteps([
+                text(
+                    "系统弹出授权提示时，按提示允许 Routekeeper；不要通过关闭提示来跳过授权。",
+                    "When macOS displays an authorization prompt, allow Routekeeper instead of dismissing it to bypass authorization."
+                ),
+                text(
+                    "需要手动检查时，在沙箱页打开“自动化”设置，确认 Routekeeper 可以控制“终端”。",
+                    "To check manually, open Automation settings from the Sandbox page and confirm that Routekeeper is allowed to control Terminal. The timing at which macOS applies a permission can vary by version."
+                ),
+                text(
+                    "授权后返回 Routekeeper；沙箱页会在授权卡片仍显示时自动重新检查。",
+                    "Return to Routekeeper after granting access; the Sandbox page keeps checking while the authorization card is visible."
+                )
+            ])
             helpParagraph(
                 text(
                     "强制边界来自 macOS Sandbox（通常称 Seatbelt）。Routekeeper 通过系统 sandbox-exec 为每次会话加载临时规则，限制文件、网络与子进程访问。它不是 App Sandbox：App Sandbox 约束应用自身的签名权限，而这里需要约束由 Routekeeper 启动的外部 Claude 进程。",
@@ -852,14 +887,14 @@ struct RoutekeeperHelpView: View {
             }
             helpParagraph(
                 text(
-                    "两个保护对象共享项目来源、交换根目录、时区和本机上游代理设置，但各自创建会话、执行启动前检查并使用独立中继。共享设置不等于共享权限；Routekeeper 不会自动把工作副本覆盖回原项目，也不会把一个目标的登录凭证交给另一个。",
-                    "Both protected targets share the project source, exchange root, timezone and local upstream proxy settings, but each creates its own session, runs its own preflight and uses its own relay. Shared settings do not mean shared permissions: Routekeeper never copies a workspace back over the original project automatically, and never gives one target's sign-in credentials to the other."
+                    "Claude Code、Claude 和 Chrome 共享项目来源、交换根目录、时区、语言地区、出口默认值和本机上游代理设置，但三者各自启动并维护独立状态与工作数据。共享环境不等于共享权限：Routekeeper 不会自动把工作副本覆盖回原项目，也不会把 Claude Code 凭证交给 Claude，或把宿主 Chrome 的登录数据交给独立 Chrome 配置。",
+                    "Claude Code, Claude and Chrome share the project source, exchange root, timezone, language region, exit defaults and local upstream proxy settings, while each keeps its own launch state and working data. A shared environment does not mean shared permissions: Routekeeper never copies a workspace back over the original project automatically, never gives Claude Code credentials to Claude, and never gives host Chrome sign-in data to the dedicated Chrome profile."
                 )
             )
             helpCallout(
                 text(
-                    "这是进程隔离，不是虚拟机。Claude 不能直接访问公网或局域网，也不能打开默认浏览器，但仍可能读取主机网卡名称、地址、路由和 DNS 配置。Claude 网页版使用独立的官方 Chrome 配置和中继，但 Chrome 仍运行在自己的原生沙箱中，不获得实验性沙箱的完整文件边界；Routekeeper 不内置浏览器，也不接受来源不明的 Chromium。",
-                    "This is process isolation, not a virtual machine. Claude cannot reach the public internet or LAN directly and cannot open the default browser, but it may still read host interface names, addresses, routes and DNS configuration. Claude on the web uses a dedicated official Chrome profile and relay, but Chrome still runs in its own native sandbox and does not receive the experimental sandbox's full filesystem boundary. Routekeeper neither bundles a browser nor accepts an unverified Chromium build."
+                    "这是进程隔离，不是虚拟机。Claude 不能直接访问公网或局域网，也不能打开默认浏览器，但仍可能读取主机网卡名称、地址、路由和 DNS 配置。 Chrome 使用独立的官方 Chrome 配置和中继，但 Chrome 仍运行在自己的原生沙箱中，不获得实验性沙箱的完整文件边界；Routekeeper 不内置浏览器，也不接受来源不明的 Chromium。",
+                    "This is process isolation, not a virtual machine. Claude cannot reach the public internet or LAN directly and cannot open the default browser, but it may still read host interface names, addresses, routes and DNS configuration. Chrome uses a dedicated official Chrome profile and relay, but Chrome still runs in its own native sandbox and does not receive the experimental sandbox's full filesystem boundary. Routekeeper neither bundles a browser nor accepts an unverified Chromium build."
                 ),
                 symbol: "exclamationmark.shield"
             )
@@ -876,32 +911,51 @@ struct RoutekeeperHelpView: View {
         VStack(alignment: .leading, spacing: 18) {
             helpParagraph(
                 text(
-                    "首次打开时，Routekeeper 只默认启用当前 Mac 上检测到的 Claude 客户端；已有保存设置不会被改写。两个保护对象可以同时启用，也可以只启用其中一个。每个对象都有自己的准备状态和主操作；一个对象正在运行时，另一个对象仍可独立准备或运行。",
-                    "On first use, Routekeeper enables only the Claude clients detected on this Mac; saved choices are never rewritten. Both protected targets can be enabled together, or either one can be used alone. Each target has its own readiness state and primary action. One target can prepare or run while the other remains independent."
+                    "沙箱页面把 Claude Code、Claude 和 Chrome 放在同一条横向卡片轨道中。窗口较窄时使用触控板或滚动条左右滑动，不会把第三张卡换到下一行。Claude Code 和 Claude 可在卡片右上角启用或关闭；Chrome 始终使用独立配置单独打开。",
+                    "The sandbox page places Claude Code, Claude and Chrome in one horizontal card track. On narrower windows, swipe or use the scrollbar to move sideways; the third card never wraps onto a new row. Claude Code and Claude can be enabled or disabled from each card's top-right switch, while Chrome opens independently in its own Chrome profile."
+                )
+            )
+            helpCallout(
+                text(
+                    "项目、交换目录、时区、语言地区、出口默认值和上游代理位于标题栏右上角菜单的“共享环境、时区与地区…”。主页面不再重复放置共享设置卡；修改后会同步到三个 Claude 环境。",
+                    "Project, exchange folder, timezone, language region, exit defaults and upstream proxy live under Shared environment, timezone and region in the top-right title-bar menu. The main page no longer repeats a shared-settings card, and changes are applied to all three Claude environments."
+                ),
+                symbol: "slider.horizontal.3"
+            )
+            helpParagraph(
+                text(
+                    "三张卡片使用相同的结构：顶部是名称与状态，中部是各自的环境详情和次要操作，底部固定显示当前状态与唯一主操作。主操作始终位于卡片右下角；重新检测、选择命令、获取客户端和管理登录等次要操作使用统一的灰色样式，不会与主操作争夺注意力。",
+                    "All three cards use the same structure: name and status at the top, environment details and secondary actions in the middle, and current state plus one primary action at the bottom. The primary action always sits at the bottom-right; secondary actions such as Detect again, Choose command, Get app and Manage sign-in use the same neutral style so they do not compete with it."
+                )
+            )
+            helpParagraph(
+                text(
+                    "项目工作副本位于用户主目录的 `~/Routekeeper/Workspaces/项目名/会话名/workspace`，同一目录下的 `session.json` 记录来源、目标和时间。创建会话后可以随时选择“在 Finder 中显示”，不需要等待会话结束。沙箱的独立 HOME、临时文件、日志和控制文件仍保存在 Routekeeper 的应用支持目录中。",
+                    "Project workspaces live under `~/Routekeeper/Workspaces/project/session/workspace` in your home folder, and `session.json` records the source, target and times. After a session is created, choose Show in Finder at any time; you do not need to wait for the session to end. The sandbox HOME, temporary files, logs and control files remain in Routekeeper's application-support directory."
                 )
             )
             helpSteps([
                 text(
-                    "先查看“Claude Code 客户端”和“官方客户端”。未安装时使用卡片中的官方入口；已安装时直接复用现有安装，不复制、不覆盖。Claude Code 不在默认位置时，可以选择现有的 claude 命令。",
-                    "Check Claude Code and the official desktop app first. Use the official entry in the card when an app is missing. Existing installations are reused without copying or overwriting. If Claude Code is outside its default location, choose the existing claude command."
+                    "Claude Code 卡会复用现有 claude 命令；不在默认位置时使用“选择命令…”指定。登录凭证是可选配置，不影响创建隔离会话。",
+                    "The Claude Code card reuses an existing claude command and offers Choose command when it is outside the default location. Sign-in is optional and does not block creation of an isolated session."
                 ),
                 text(
-                    "Claude Code 需要选择项目文件夹、保存 Claude Code 登录凭证，并在终端中启动。",
-                    "Claude Code requires a project folder, a saved Claude Code sign-in token and a Terminal launch."
+                    "Claude 卡会验证官方签名与客户端版本；右下角主操作依次可能是获取官方客户端、创建隔离会话或启动 Claude。",
+                    "The Claude card verifies the official signature and app version. Its bottom-right primary action progresses through Get official app, Create isolated session and Launch Claude as appropriate."
                 ),
                 text(
-                    "Claude Desktop 需要已验证签名的官方客户端；项目文件夹可选，持久登录默认不会与其他目标共享。",
-                    "Claude Desktop requires a verified official app. The project folder is optional, and its persistent sign-in is not shared with the other target."
+                    "Chrome 卡会验证官方 Chrome 和独立配置；右下角主操作是打开 Chrome，运行后则变为关闭 Chrome 或恢复网络。",
+                    "The Chrome card verifies official Chrome and the dedicated profile. Its bottom-right primary action opens Chrome; once running, it changes to Close browser or Restore network as needed."
                 ),
                 text(
-                    "同一个项目会被分别复制到两个会话目录。两边的修改不会互相覆盖，审阅时需要分别处理。",
-                    "The same project is copied separately into each session. Changes do not overwrite each other and must be reviewed per target."
+                    "同一个项目会分别复制到 Claude Code 和 Claude 的会话目录；Chrome 不获得项目文件夹写入权限。各环境的修改不会互相覆盖，审阅时需要分别处理。",
+                    "The same project is copied separately into the Claude Code and Claude session folders; Chrome receives no project-folder write access. Changes never overwrite each other and must be reviewed per environment."
                 )
             ])
             helpCallout(
                 text(
-                    "未安装任何 Claude 客户端不会阻止普通网络保护。关闭某个保护对象前必须先结束它的会话；关闭实验性沙箱则要求所有已启用目标和 Claude 网页版都没有活动运行。",
-                    "Missing Claude clients do not block regular network protection. End a target's session before disabling that target. Turning off the experimental sandbox requires every enabled target and Claude on the web to be inactive."
+                    "未安装任何 Claude 客户端不会阻止普通网络保护。关闭 Claude Code 或 Claude 前必须先结束该卡片的会话；关闭实验性沙箱则要求所有已启用目标和 Chrome 都没有活动运行。",
+                    "Missing Claude clients do not block regular network protection. End a card's session before disabling Claude Code or Claude. Turning off the experimental sandbox requires every enabled target and Chrome to be inactive."
                 ),
                 symbol: "power"
             )
@@ -912,26 +966,26 @@ struct RoutekeeperHelpView: View {
         VStack(alignment: .leading, spacing: 18) {
             helpParagraph(
                 text(
-                    "Claude 网页版是一个可选的伴随浏览器，不是第三个 Claude 进程保护对象。Routekeeper 只启动已验证签名的 Google Chrome，并让它使用独立的 Profile、Cookie、缓存、下载目录与本机代理；不会读取或导入宿主 Chrome 的登录状态、密码、历史记录和扩展。",
-                    "Claude on the web is an optional companion browser, not a third protected Claude process. Routekeeper launches only a verified Google Chrome bundle and gives it a dedicated profile, cookies, cache, download directory and local proxy. It never reads or imports sign-in state, passwords, history or extensions from the host Chrome profile."
+                    "Chrome 是一个可选的伴随浏览器，不是第三个 Claude 进程保护对象。Routekeeper 只启动已验证签名的 Google Chrome，并让它使用独立配置、Cookie、缓存、下载目录与本机代理；不会读取或导入宿主 Chrome 的登录状态、密码、历史记录和扩展。",
+                    "Chrome is an optional companion browser, not a third protected Claude process. Routekeeper launches only a verified Google Chrome bundle and gives it a dedicated profile, cookies, cache, download directory and local proxy. It never reads or imports sign-in state, passwords, history or extensions from the host Chrome profile."
                 )
             )
             helpSteps([
                 text(
-                    "在“会话范围”中分别选择时区和语言。Routekeeper 会把它们传入独立 Chrome 的启动环境和网页请求语言，不修改 macOS 系统设置。",
-                    "Choose timezone and language separately in Session scope. Routekeeper passes them to the dedicated Chrome launch environment and web request language without changing macOS settings."
+                    "在标题栏右上角菜单的“共享环境、时区与地区…”中设置时区和语言地区。Routekeeper 会把它们传入独立 Chrome 的启动环境、网页请求语言和三个 Claude 环境，不修改 macOS 系统设置。",
+                    "Set timezone and language region under Shared environment, timezone and region in the top-right title-bar menu. Routekeeper passes them to the dedicated Chrome launch environment, web request language and all three Claude environments without changing macOS settings."
                 ),
                 text(
-                    "网络通过本机 Routekeeper 中继和当前上游代理转发。路由不会被外部进程重写；FlClash 看到的是 Routekeeper 中继，而不是 Chrome，因此 Claude 域名规则比 Chrome 进程规则更重要。",
-                    "Network traffic goes through the local Routekeeper relay and the current upstream proxy. Routing is not rewritten by an external process, and FlClash sees the Routekeeper relay instead of Chrome, so Claude domain rules matter more than a Chrome process rule."
+                    "网络通过本机 Routekeeper 中继和当前上游代理转发。路由不会被外部进程重写；当前代理看到的是 Routekeeper 中继，而不是 Chrome，因此 Claude 域名规则比 Chrome 进程规则更重要。",
+                    "Network traffic goes through the local Routekeeper relay and the current upstream proxy. Routing is not rewritten by an external process, and the current proxy sees the Routekeeper relay instead of Chrome, so Claude domain rules matter more than a Chrome process rule."
                 ),
                 text(
-                    "打开前，Routekeeper 会用同一中继访问 Claude，并核对实际出口。未设置固定出口、没有取得结果或出口不一致时会明确警告；检查不是打开网页版的前置条件，你确认风险后仍可继续。暂停中继后，网页版会立即失去网络，但浏览器窗口仍可保留。",
+                    "打开前，Routekeeper 会用同一中继访问 Claude，并核对实际出口。未设置固定出口、没有取得结果或出口不一致时会明确警告；检查不是打开 Chrome 的前置条件，你确认风险后仍可继续。暂停中继后，Chrome 会立即失去网络，但浏览器窗口仍可保留。",
                     "Before opening, Routekeeper checks the actual exit through the same relay by reaching Claude. A missing fixed exit, missing result or mismatch produces a clear warning. The check is not a prerequisite for opening the browser, and you may continue after confirming the risk. Pausing the relay immediately removes browser networking while the window can remain open."
                 ),
                 text(
-                    "网页版的 Claude 登录保存在独立 Profile 中。可从页面右上角菜单关闭网页版网络或清除该 Profile；宿主 Chrome 不受影响。",
-                    "Claude web sign-in is stored in the dedicated profile. Use the page's top-right menu to pause browser networking or clear the profile without affecting host Chrome."
+                    "Chrome 中的 Claude 登录保存在独立配置中。可从页面右上角菜单关闭 Chrome 网络或清除该配置；宿主 Chrome 不受影响。",
+                    "Claude sign-in in Chrome is stored in the dedicated profile. Use the page's top-right menu to pause Chrome networking or clear the profile without affecting host Chrome."
                 )
             ])
             helpCallout(
@@ -943,8 +997,8 @@ struct RoutekeeperHelpView: View {
             )
             helpCallout(
                 text(
-                    "在 FlClash 中启用 TUN 时，虚拟网卡是系统流量的入口；客户端的“出站网卡”是它连接上游节点时使用的接口。后者通常应保持自动，只有存在多个物理出口时才指定实际网卡。把出站网卡设为 FlClash 自己创建的 utun 可能导致回环，不能用来修复 Claude 直连。",
-                    "When TUN is enabled in FlClash, the virtual interface is the ingress for system traffic. Outbound interface is the interface FlClash uses to connect to its upstream node. It should normally remain automatic and should use a physical interface only when multiple physical paths exist. Setting it to FlClash's own utun can create a loop and does not fix direct routing for Claude."
+                    "在当前代理中启用 TUN 时，虚拟网卡是系统流量的入口；代理的“出站网卡”是它连接上游节点时使用的接口。后者通常应保持自动，只有存在多个物理出口时才指定实际网卡。把出站网卡设为代理自己创建的 utun 可能导致回环，不能用来修复 Claude 直连。",
+                    "When TUN is enabled in the current proxy, the virtual interface is the ingress for system traffic. The proxy's Outbound interface is used to reach its upstream node. It should normally remain automatic and should use a physical interface only when multiple physical paths exist. Setting it to the proxy's own utun can create a loop and does not fix direct routing for Claude."
                 ),
                 symbol: "network"
             )
@@ -955,14 +1009,16 @@ struct RoutekeeperHelpView: View {
         VStack(alignment: .leading, spacing: 18) {
             helpParagraph(
                 text(
-                    "项目文件夹是读取来源，沙箱会把它复制到本次会话自己的工作副本。交换根目录是文件交付的上级目录，系统会在其中为 Claude Code 和 Claude Desktop 分别创建交换子目录，避免并发会话写入同一位置。",
-                    "The project folder is the source. The sandbox copies it into this session's own workspace. The exchange root is the parent for handoff files; Routekeeper creates separate exchange folders for Claude Code and Claude Desktop so concurrent sessions do not write to the same location."
+                    "项目文件夹是读取来源，沙箱会把它复制到 `~/Routekeeper/Workspaces` 下、以项目名和会话名组织的用户可见工作副本。交换根目录是文件交付的上级目录，系统会在其中为 Claude Code 和 Claude 分别创建交换子目录，避免并发会话写入同一位置。 Chrome 使用独立的 Chrome 下载目录，不直接写入项目。",
+                    "The project folder is the source. The sandbox copies it into a user-visible workspace under `~/Routekeeper/Workspaces`, organized by project and session. The exchange root is the parent for handoff files; Routekeeper creates separate exchange folders for Claude Code and Claude so concurrent sessions do not write to the same location. Chrome uses its own Chrome download directory and never writes directly into the project."
                 )
             )
             helpSteps([
                 text("项目文件夹与交换根目录不能相同，也不能互相包含。", "The project folder and exchange root cannot be identical or contain each other."),
-                text("系统会在交换根目录下建立“Claude Code”和“Claude Desktop”子目录。", "Routekeeper creates Claude Code and Claude Desktop subfolders under the exchange root."),
-                text("会话结束后，工作副本仍保留供审阅；清理会话才会删除 Routekeeper 自己的会话副本。", "After a session ends, its workspace remains for review. Resetting the session removes only Routekeeper-owned copies.")
+                text("系统会在交换根目录下建立“Claude Code”和“Claude”子目录。", "Routekeeper creates Claude Code and Claude subfolders under the exchange root."),
+                text("工作副本容器带有 Routekeeper 归属标记；清理页只处理可确认归属的副本，且不会默认勾选用户工作副本。", "Each workspace container has a Routekeeper ownership marker. Cleanup only handles verified copies and never selects user workspaces by default."),
+                text("共享环境的时区、语言地区和出口默认值会用于这三个环境；目录路径仍各自独立。", "Shared timezone, language region and exit defaults apply to all three environments, while their paths remain independent."),
+                text("会话结束后，工作副本仍保留供审阅；清理会话或 Chrome 配置 只会删除 Routekeeper 自己管理的数据。", "After a session ends, its workspace remains for review. Cleanup or clearing the Chrome profile removes only data managed by Routekeeper.")
             ])
         }
     }
@@ -995,43 +1051,61 @@ struct RoutekeeperHelpView: View {
         VStack(alignment: .leading, spacing: 18) {
             helpParagraph(
                 text(
-                    "准备、启动、暂停网络和结束会话都按保护对象分别执行。工具栏菜单只显示当前可用的会话操作；主卡片只显示这个对象当前真正需要的下一步。",
-                    "Preparation, launch, network pause and session end are performed per protected target. The toolbar menu shows only currently available session actions, while each target card shows only its real next step."
+                    "Claude Code、Claude 和 Chrome 的准备、启动、暂停网络与结束操作彼此独立。工具栏菜单只显示当前可用的会话操作；每张卡片右下角只显示该环境当前真正需要的下一步。",
+                    "Preparation, launch, network pause and shutdown are independent for Claude Code, Claude and Chrome. The toolbar menu shows only currently available session actions, while each card's bottom-right action shows only the next step needed for that environment."
                 )
             )
             helpSteps([
-                text("先完成共享范围、固定出口、代理和该对象的专属准备项。", "Complete shared scope, fixed exit, proxy and the target-specific prerequisites."),
-                text("点击目标卡片的主操作创建隔离会话；两个目标可以分别进行。代理网关或出口核对未确认时会显示警告，但不会阻止启动。", "Use the target card's primary action to create its session. The two targets can proceed independently. Unconfirmed gateway or exit verification produces a warning but does not block launch."),
-                text("会话运行后可以单独关闭或恢复网络，也可以单独结束并审阅工作副本。", "After a session starts, its network can be paused or restored and its workspace reviewed or ended independently."),
-                text("关闭实验性沙箱使用顶部状态卡右侧的操作，并需要确认；存在活动会话或正在运行的 Claude 网页版时不可关闭。", "Turning off the experimental sandbox uses the action beside the status card at the top of the page and requires confirmation. It is unavailable while a session or Claude on the web is running.")
+                text("先在右上角“共享环境、时区与地区…”完成共享配置，再补齐卡片内的客户端、登录凭证和 Chrome 准备项。", "Complete shared configuration under Shared environment, timezone and region in the top-right menu, then resolve client, sign-in and Chrome prerequisites inside each card."),
+                text("使用卡片右下角主操作创建隔离会话或打开 Chrome；三个环境可以分别进行。代理网关或出口核对未确认时会显示警告，但不会阻止启动。", "Use the bottom-right primary action to create an isolated session or open Chrome. All three can proceed independently. Unconfirmed gateway or exit verification shows a warning but does not block launch."),
+                text("会话运行后可以单独关闭或恢复网络，也可以单独结束并审阅工作副本；Chrome 可以关闭或清除独立配置。", "After a session starts, pause or restore its network and review or end its workspace independently. Chrome can close or clear its dedicated profile."),
+                text("关闭实验性沙箱使用顶部状态卡右侧的操作，并需要确认；存在活动会话或正在运行的 Chrome 时不可关闭。", "Turning off the experimental sandbox uses the action beside the status card at the top of the page and requires confirmation. It is unavailable while a session or Chrome is running.")
             ])
         }
     }
 
     private var sandboxStatusContent: some View {
         VStack(alignment: .leading, spacing: 18) {
-            evidenceRow(
-                title: text("绿色", "Green"),
-                detail: text("该保护对象已通过当前条件下需要的检查，或会话正在正常运行。", "The target passed the checks required under the current conditions, or its session is running normally."),
-                symbol: "checkmark.circle.fill",
-                color: appStatusSuccess
+            helpParagraph(
+                text(
+                    "主操作颜色表达正在执行的动作，不代表账号或 Claude 服务端状态。三张卡都遵守同一套规则，主按钮始终位于右下角。",
+                    "Primary-action colors describe the action you are about to perform, not the account or Claude server state. All three cards follow the same rules, and the primary button always sits at the bottom-right."
+                )
             )
             evidenceRow(
-                title: text("黄色", "Yellow"),
-                detail: text("仍有准备项、证据待确认、网络已暂停或操作需要用户注意。黄色不会当作通过。", "Preparation is incomplete, evidence is unconfirmed, networking is paused or action is required. Yellow is never treated as passed."),
+                title: text("蓝色", "Blue"),
+                detail: text("普通主操作，例如创建隔离会话、启动 Claude、打开 Chrome。", "Normal primary actions such as creating an isolated session, launching Claude or opening Chrome."),
+                symbol: "arrow.right.circle.fill",
+                color: appAccent
+            )
+            evidenceRow(
+                title: text("橙色", "Orange"),
+                detail: text("需要处理后再继续，例如恢复网络、修正配置、重试或查看网关警告。", "Actions that need attention first, such as restoring networking, fixing configuration, retrying or reviewing a gateway warning."),
                 symbol: "exclamationmark.circle.fill",
                 color: appStatusWarning
             )
             evidenceRow(
                 title: text("红色", "Red"),
-                detail: text("检查未通过、会话启动失败或监听到不安全边界。应停止该对象并按卡片说明处理后重试。", "A check failed, the session could not start or an unsafe boundary was observed. Stop that target, follow the card's guidance and retry."),
+                detail: text("关闭沙箱、关闭浏览器、拒绝操作，以及其他需要明确警示的破坏性动作。", "Turn off the sandbox, close the browser, reject an operation and other destructive actions that need a clear warning."),
                 symbol: "xmark.circle.fill",
                 color: appStatusFailure
             )
+            evidenceRow(
+                title: text("绿色", "Green"),
+                detail: text("只表示状态已经通过或运行正常，不作为主按钮颜色。", "Used for passed or healthy state, never as the normal primary-button color."),
+                symbol: "checkmark.circle.fill",
+                color: appStatusSuccess
+            )
+            evidenceRow(
+                title: text("灰色", "Gray"),
+                detail: text("重新检测、选择命令、管理登录、查看帮助等不会改变主要流程的次要操作。", "Secondary actions that do not change the main flow, such as Detect again, Choose command, Manage sign-in or help."),
+                symbol: "circle.fill",
+                color: Color(nsColor: .secondaryLabelColor)
+            )
             helpParagraph(
                 text(
-                    "如果按钮不可用，先查看同一张目标卡片中的阻塞项。共享代理、固定出口或目录问题会同时影响两个目标；客户端安装和登录凭证问题只影响对应对象。",
-                    "If an action is unavailable, check the blocking items in the same target card. Shared proxy, fixed exit or folder problems affect both targets; client installation and sign-in issues affect only their target."
+                    "如果按钮不可用，先查看同一张卡片中标注为橙色的阻塞项。共享环境、固定出口或代理问题会同时影响三个 Claude 环境；客户端安装、登录凭证和 Chrome 配置问题只影响对应环境。",
+                    "If an action is unavailable, first review the orange blocking item in the same card. Shared environment, fixed exit or proxy problems affect all three Claude environments; client installation, sign-in and Chrome profile issues affect only their environment."
                 )
             )
         }

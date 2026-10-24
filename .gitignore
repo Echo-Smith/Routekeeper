@@ -1,12 +1,32 @@
 .build/
 .swiftpm/
 dist/
+DerivedData/
+*.xcarchive
 .DS_Store
+**/.DS_Store
 *.xcuserstate
 xcuserdata/
 
 # Provisioning profiles and signing material stay local.
+*.provisionprofile
+*.mobileprovision
+*.p12
+*.cer
+*.key
 signing/*.provisionprofile
 signing/*.mobileprovision
 signing/*.p12
 signing/*.cer
+
+# Local environment, logs and developer tooling.
+.env
+.env.*
+*.log
+.vscode/
+.idea/
+coverage/
+
+# Release artifacts.
+*.dmg
+*.app/

@@ -3,6 +3,7 @@ import SwiftUI
 
 enum NetworkProtectionAnchor: Hashable {
     case status
+    case scope
     case protectionMode
     case evidence
 }
@@ -21,7 +22,7 @@ struct NetworkProtectionPage: View {
                 },
                 contentMode: .statusOnly
             )
-            .id(NetworkProtectionAnchor.status)
+            .id(DashboardScrollID.section(.status))
 
             NetworkSettingsPage(store: store)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,7 +36,7 @@ struct NetworkProtectionPage: View {
                 contentMode: .resultsOnly,
                 showsToolbar: false
             )
-            .id(NetworkProtectionAnchor.evidence)
+            .id(DashboardScrollID.section(.evidence))
         }
         .frame(maxWidth: 1040, alignment: .leading)
         .task(id: store.settings.proxyClient) {

@@ -3,7 +3,7 @@ import GuardCore
 import SwiftUI
 
 enum DisclaimerDocument {
-    static let currentVersion = "2026-10-21.4"
+    static let currentVersion = "2026-10-24.1"
 }
 
 struct DisclaimerConsentSheet: View {
@@ -17,11 +17,11 @@ struct DisclaimerConsentSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 7) {
-                Label(text("免责声明", "Disclaimer"), systemImage: "doc.text")
+                Label(text("用户协议与免责声明", "Terms and Disclaimer"), systemImage: "doc.text")
                     .routekeeperFont(.title2, weight: .semibold)
                     .accessibilityAddTraits(.isHeader)
-                Text(text("请阅读并同意以下条款后继续使用。",
-                          "Read and accept these terms before continuing."))
+                Text(text("请阅读并同意以下用户协议、许可范围与隐私说明后继续使用。",
+                          "Read and accept these terms, license scope and privacy notice before continuing."))
                     .routekeeperFont(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -31,8 +31,8 @@ struct DisclaimerConsentSheet: View {
                     DisclaimerScopeNotice()
                     AppHairline()
                     JustifiedText(text(
-                        "在使用 Routekeeper（以下简称“本软件”）前，请仔细阅读并充分理解本声明的全部内容。点击“同意”即表示你已阅读、理解并接受以下全部条款；如不同意，请点击“退出”并停止使用本软件。",
-                        "Before using Routekeeper (the “Software”), read and understand this notice. Clicking Agree confirms that you accept all terms below. If you do not agree, click Quit and stop using the Software."
+                        "在使用 Routekeeper（以下简称“本软件”）前，请仔细阅读并充分理解本协议的全部内容。点击“同意”即表示你已阅读、理解并接受以下全部条款；如不同意，请点击“退出”并停止使用本软件。",
+                        "Before using Routekeeper (the “Software”), read and understand these terms. Clicking Agree confirms that you accept all terms below. If you do not agree, click Quit and stop using the Software."
                     ))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     DisclaimerBody()
@@ -70,11 +70,11 @@ struct DisclaimerBody: View {
             return [
                 .init(
                     title: "1. Software nature",
-                    body: "Routekeeper is a local network inspection and monitoring aid. It is not an antivirus product, firewall, guarantee of network anonymity, or an official Anthropic or Claude product. In Claude Desktop, Chat is an in-app web workspace and Code uses Claude Code; the sandbox treats the official app and its helper processes as one application boundary. The sandbox enforces a traffic path but does not virtualize host network metadata: a sandboxed process may still read interface names, addresses, routes and resolver configuration even though direct LAN and public traffic is denied. Probe results may be incomplete and must be interpreted together with your own network environment."
+                    body: "Routekeeper is a local network inspection and monitoring aid. It is not an antivirus product, firewall, guarantee of network anonymity, or an official Anthropic or Claude product. In Claude, Chat is an in-app web workspace and Code uses Claude Code; the sandbox treats the official app and its helper processes as one application boundary. The sandbox enforces a traffic path but does not virtualize host network metadata: a sandboxed process may still read interface names, addresses, routes and resolver configuration even though direct LAN and public traffic is denied. Probe results may be incomplete and must be interpreted together with your own network environment."
                 ),
                 .init(
-                    title: "2. Usage restrictions",
-                    body: "The Software is provided only for learning, technical research and other non-commercial purposes. Do not use it for any commercial purpose, including paid distribution, bundling for sale, inclusion in a commercial service, or business activity conducted in the Software’s name. Commercial activity is unrelated to the Software and its developer. Do not use the Software for activity that violates applicable laws or regulations, including circumventing lawful network access restrictions, distributing unlawful material, attacking networks, or infringing the rights of others."
+                    title: "2. License and usage restrictions",
+                    body: "The source code is provided under the PolyForm Noncommercial License 1.0.0 in the repository’s LICENSE file. The Software is therefore source-available for personal learning, technical research and other noncommercial purposes; it is not open source under the OSI definition. Do not use it for any commercial purpose, including paid distribution, bundling for sale, inclusion in a commercial service, or business activity conducted in the Software’s name. Commercial use requires separate prior written permission from the copyright holder. Do not remove copyright or license notices. Do not use the Software for activity that violates applicable laws or regulations, including circumventing lawful network access restrictions, distributing unlawful material, attacking networks, or infringing the rights of others."
                 ),
                 .init(
                     title: "3. User responsibility",
@@ -94,7 +94,7 @@ struct DisclaimerBody: View {
                 ),
                 .init(
                     title: "7. Data collection and privacy",
-                    body: "Reports and history are stored locally. Inspection uses network requests to services such as ipify, ipinfo.io, STUN and DNS providers and claude.ai; those services can see your public egress IP. Optional third-party IP intelligence lookups remain off unless you enable them. The Software does not automatically upload saved reports. Claude Code sign-in tokens are stored in the macOS Keychain and are not included in reports. If persistent Claude Desktop sign-in is enabled, cookies and local Claude data are retained in a Routekeeper-owned application-support profile until you clear that profile or reset local information."
+                    body: "Reports, egress history and settings are stored locally. Inspection uses direct network requests to services such as ipify, ipinfo.io, STUN and DNS providers and claude.ai; those services can see your public egress IP. Optional third-party IP intelligence lookups remain off unless you enable them and run a manual check. The Software does not automatically upload saved reports. Claude Code sign-in tokens are stored in the macOS Keychain and are not included in reports. Sandbox HOME, logs and temporary data remain under the Routekeeper application-support directory, while user-visible project copies live under ~/Routekeeper/Workspaces. If persistent Claude sign-in or the dedicated Chrome profile is enabled, cookies and local data are retained in Routekeeper-owned profiles until you clear them or reset local information. See PRIVACY.md for the full data-flow description."
                 ),
                 .init(
                     title: "8. Changes to this notice",
@@ -110,11 +110,11 @@ struct DisclaimerBody: View {
         return [
             .init(
                 title: "一、软件性质",
-                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。Claude Desktop 的 Chat 模式是应用内网页工作区，Code 模式使用 Claude Code；沙箱把官方应用及其辅助进程视为同一个应用边界。沙箱强制的是流量路径，不虚拟化主机网络元数据：受限进程仍可能读取网卡名称、地址、路由和 DNS 解析器配置，但局域网与公网直连会被拒绝。检测结果可能不完整，需要结合实际网络环境理解。"
+                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。Claude 的 Chat 模式是应用内网页工作区，Code 模式使用 Claude Code；沙箱把官方应用及其辅助进程视为同一个应用边界。沙箱强制的是流量路径，不虚拟化主机网络元数据：受限进程仍可能读取网卡名称、地址、路由和 DNS 解析器配置，但局域网与公网直连会被拒绝。检测结果可能不完整，需要结合实际网络环境理解。"
             ),
             .init(
-                title: "二、使用限制",
-                body: "本软件仅供学习交流、技术研究等非商业用途。严禁将本软件用于任何商业目的，包括但不限于付费分发、捆绑销售、作为商业服务的组成部分或以本软件名义开展经营活动；任何商业行为均与本软件及其开发者无关。\n\n严禁将本软件用于违反你所在国家或地区法律法规的活动，包括但不限于绕过依法设置的网络访问限制、传播违法信息、实施网络攻击或侵犯他人合法权益。"
+                title: "二、许可与使用限制",
+                body: "本软件源码依据仓库 LICENSE 文件中的 PolyForm Noncommercial License 1.0.0 提供，仅供个人学习、技术研究和其他非商业用途。因此本软件属于“源码公开的非商业许可项目”，不是 OSI 定义的开源软件。严禁将本软件用于任何商业目的，包括但不限于付费分发、捆绑销售、作为商业服务的组成部分或以本软件名义开展经营活动；商业使用必须事先取得版权所有者单独的书面授权，不得删除版权或许可声明。\n\n严禁将本软件用于违反你所在国家或地区法律法规的活动，包括但不限于绕过依法设置的网络访问限制、传播违法信息、实施网络攻击或侵犯他人合法权益。"
             ),
             .init(
                 title: "三、用户责任",
@@ -134,7 +134,7 @@ struct DisclaimerBody: View {
             ),
             .init(
                 title: "七、数据收集与隐私",
-                body: "报告和历史记录保存在本机。检查过程会请求 ipify、ipinfo.io、STUN、DNS 服务及 claude.ai，这些服务能够看到当前的公网出口 IP。可选的第三方 IP 情报查询默认关闭，只有你主动开启后才会使用。本软件不会自动上传已保存的报告。Claude Code 登录凭证保存在 macOS 系统钥匙串中，不会写入检测报告。若你启用 Claude Desktop 持久登录，Cookie 和本地 Claude 数据会保存在 Routekeeper 专属的应用支持目录中，直到你主动清除该配置或清空本地信息。"
+                body: "报告、出口历史和设置保存在本机。检查过程会直接请求 ipify、ipinfo.io、STUN、DNS 服务及 claude.ai，这些服务能够看到当前的公网出口 IP。可选的第三方 IP 情报查询默认关闭，只有你主动开启并手动体检后才会使用。本软件不会自动上传已保存的报告。Claude Code 登录凭证保存在 macOS 系统钥匙串中，不会写入检测报告。沙箱 HOME、日志和临时数据位于 Routekeeper 的应用支持目录，用户可见的项目副本位于 ~/Routekeeper/Workspaces。若你启用 Claude 持久登录或专用 Chrome，Cookie 和本地数据会保存在 Routekeeper 专属 profile 中，直到你主动清除或清空本地信息。完整数据流见 PRIVACY.zh-CN.md。"
             ),
             .init(
                 title: "八、声明变更",

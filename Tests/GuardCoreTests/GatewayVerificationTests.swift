@@ -208,7 +208,8 @@ final class GatewayVerificationTests: XCTestCase {
         )
         let sandbox = SandboxCoordinator(
             preferences: defaults,
-            sessionsRoot: temp.appendingPathComponent("Isolation", isDirectory: true)
+            sessionsRoot: temp.appendingPathComponent("Isolation", isDirectory: true),
+            profilesRoot: temp.appendingPathComponent("Profiles", isDirectory: true)
         )
         sandbox.sharedConfiguration = SandboxSharedConfiguration(
             projectPath: temp.appendingPathComponent("Project").path,

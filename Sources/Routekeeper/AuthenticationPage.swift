@@ -27,8 +27,8 @@ struct AuthenticationPage: View {
             GuardCard(
                 title: text("Claude Code 状态", "Claude Code status"),
                 subtitle: text(
-                    "Claude Code 使用独立的钥匙串凭证；只有凭证失效时才重新获取。",
-                    "Claude Code uses a separate Keychain credential; acquire a new one only when it expires."
+                    "登录凭证仅保存在 macOS 钥匙串；需要时可重新获取。",
+                    "The credential is stored only in macOS Keychain and can be refreshed when needed."
                 )
             ) {
                 HStack(alignment: .top, spacing: 12) {
@@ -81,7 +81,6 @@ struct AuthenticationPage: View {
             }
 
             desktopLoginCard
-            credentialPurposeNote
         }
         .onAppear {
             controller.refresh()
@@ -120,13 +119,6 @@ struct AuthenticationPage: View {
                 Spacer()
             }
 
-            Text(text(
-                "启动时只读取现有钥匙串凭证。只有 Claude Code 提示凭证失效后，才需要重新获取。",
-                "Launch reads the existing Keychain credential. Acquire a new one only after Claude Code reports that the current credential has expired."
-            ))
-            .routekeeperFont(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -159,8 +151,8 @@ struct AuthenticationPage: View {
                 number: 2,
                 title: text("粘贴并保存", "Paste and save"),
                 detail: text(
-                    "只把终端生成的登录凭证保存在 macOS 钥匙串中，不写入日志、报告或项目。",
-                    "Store only the generated token in macOS Keychain. It is never written to logs, reports or projects."
+                    "仅保存到 macOS 钥匙串。",
+                    "Store it only in macOS Keychain."
                 )
             ) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -214,23 +206,16 @@ struct AuthenticationPage: View {
     private var sandboxUsageCard: some View {
         GuardCard(
             title: text("在沙箱中的用途", "Use in the sandbox"),
-            subtitle: text("仅注入本次启动。", "Used only for this launch.")
+            subtitle: text("登录凭证可选，不阻止创建会话。",
+                           "Sign-in is optional and never blocks session creation.")
         ) {
-            VStack(alignment: .leading, spacing: 9) {
-                Label(
-                    text("从 macOS 钥匙串读取，不写入项目、日志或交换目录。",
-                         "Read from Keychain; never written to projects, logs or the exchange folder."),
-                    systemImage: "key.horizontal"
-                )
-                Label(
-                    text("凭证失效前持续复用；更新需手动操作。",
-                         "Reused until it expires; updates require an explicit action."),
-                    systemImage: "arrow.triangle.2.circlepath"
-                )
-            }
+            Label(
+                text("仅注入本次 Claude Code 启动。",
+                     "Injected only for this Claude Code launch."),
+                systemImage: "key.horizontal"
+            )
             .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
 
             Text(text(
                 "Remote Control、/schedule 和 claude.ai 连接器可能不可用。",
@@ -274,10 +259,10 @@ struct AuthenticationPage: View {
         let statusColor = profileAvailable && persist ? appStatusSuccess : Color.secondary
 
         return GuardCard(
-            title: text("Claude Desktop 登录", "Claude Desktop sign-in"),
+            title: text("Claude 登录", "Claude sign-in"),
             subtitle: text(
-                "Claude Desktop 使用独立登录数据，不与 Claude Code 钥匙串凭证共用。",
-                "Desktop uses its own app profile and never shares the Claude Code Keychain credential."
+                "独立于 Claude Code 凭证。",
+                "Separate from the Claude Code credential."
             )
         ) {
             HStack(alignment: .top, spacing: 12) {
@@ -314,15 +299,15 @@ struct AuthenticationPage: View {
             AppHairline()
 
             Toggle(
-                text("保留 Claude Desktop 登录状态", "Keep Desktop sign-in"),
+                text("保留 Claude 登录状态", "Keep Claude sign-in"),
                 isOn: $sandbox.sharedConfiguration.persistClaudeLogin
             )
             .toggleStyle(.switch)
             .disabled(session.phase.isActive || session.busy)
 
             Text(text(
-                "开启后，Claude Desktop 会在 Routekeeper 管理的独立登录数据中复用登录状态；不会把这份状态交给 Claude Code。",
-                "When enabled, Desktop reuses its sign-in inside a Routekeeper-managed profile. Routekeeper does not read cookies or share this state with Claude Code."
+                "登录状态保存在 Routekeeper 管理的独立配置中，不会交给 Claude Code。",
+                "Sign-in is kept in a Routekeeper-managed profile and is never shared with Claude Code."
             ))
             .routekeeperFont(.caption)
             .foregroundStyle(.secondary)
@@ -332,13 +317,13 @@ struct AuthenticationPage: View {
                 AppHairline()
                 HStack(alignment: .center, spacing: 12) {
                     Text(text(
-                        "清除后，下次 Desktop 会话需要重新登录。",
-                        "After clearing, the next Desktop session must sign in again."
+                        "清除后，下次 Claude 会话需要重新登录。",
+                        "After clearing, the next Claude session must sign in again."
                     ))
                     .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     Spacer()
-                    Button(text("清除 Desktop 登录数据", "Clear Desktop sign-in data"), role: .destructive) {
+                    Button(text("清除 Claude 登录数据", "Clear Claude sign-in data"), role: .destructive) {
                         _ = session.clearClaudeLoginState()
                     }
                     .disabled(session.phase.isActive || session.busy || session.claudeRunning)
@@ -351,17 +336,17 @@ struct AuthenticationPage: View {
         let profileAvailable = sandbox.desktopSession.persistedClaudeProfileAvailable
         let persist = sandbox.sharedConfiguration.persistClaudeLogin
         if profileAvailable && persist {
-            return text("已保留 Desktop 登录状态", "Desktop sign-in profile saved")
+            return text("已保留 Claude 登录状态", "Claude sign-in profile saved")
         }
         if profileAvailable {
-            return text("已有 Desktop 登录数据，但当前未启用保留",
-                          "A Desktop profile exists, but persistence is off")
+            return text("已有 Claude 登录数据，但当前未启用保留",
+                          "A Claude profile exists, but persistence is off")
         }
         if persist {
-            return text("将在下次登录后保留 Desktop 状态",
-                          "Desktop sign-in will be kept after the next login")
+            return text("将在下次登录后保留 Claude 状态",
+                          "Claude sign-in will be kept after the next login")
         }
-        return text("当前使用临时 Desktop 登录", "Desktop currently uses a temporary sign-in")
+        return text("当前使用临时 Claude 登录", "Claude currently uses a temporary sign-in")
     }
 
     private var desktopProfileStatusDetail: String {
@@ -381,40 +366,14 @@ struct AuthenticationPage: View {
         }
         if persist {
             return text(
-                "首次完成 Desktop 登录后，登录状态会保存在独立登录数据中。",
-                "After the first Desktop sign-in, the session is stored in a separate profile."
+                "首次完成 Claude 登录后，登录状态会保存在独立配置中。",
+                "After the first Claude sign-in, the session is stored in a separate profile."
             )
         }
         return text(
             "每次会话使用新的临时登录数据，会话结束后不会保留登录状态。",
             "Each session uses a fresh temporary profile and does not keep sign-in state afterward."
         )
-    }
-
-    private var credentialPurposeNote: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(text("Claude Code 登录凭证的用途", "What the Claude Code credential is for"))
-                    .routekeeperFont(.caption, weight: .semibold)
-                Text(text(
-                    "它只用于让 Routekeeper 启动的 Claude Code 复用你当前的 Claude 账户登录。凭证从 macOS 钥匙串读取，不用于其他网站或系统账户，也不会写入项目、日志、沙箱交换目录或检测报告。",
-                    "It is used only so Claude Code launched by Routekeeper can reuse your current Claude account sign-in. The credential is read from macOS Keychain; it is not used for other websites or system accounts and is never written to projects, logs, the sandbox exchange folder or check reports."
-                ))
-                .routekeeperFont(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .appSurface(.inset, corner: 12)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("claude-credential-purpose")
     }
 
     private func credentialStep<Actions: View>(

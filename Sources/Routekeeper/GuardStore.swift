@@ -81,7 +81,7 @@ final class GuardStore {
         cleanupCandidates.filter { $0.isSelectable && cleanupSelection.contains($0.id) }
     }
     var selectedCleanupBytes: Int64 { selectedCleanupTargets.reduce(0) { $0 + $1.sizeBytes } }
-    var desktopInstallation = ClaudeDesktopDiscovery.locate()
+    var desktopInstallation: ClaudeDesktopInstallation?
     @ObservationIgnored private var revisionHandlers: [() -> Void] = []
     var languageRevision = 0 {
         didSet { revisionHandlers.forEach { $0() } }
@@ -103,6 +103,7 @@ final class GuardStore {
     @ObservationIgnored private let diagnostics: DiagnosticRunner
     @ObservationIgnored private let notificationsEnabled: Bool
     @ObservationIgnored private var systemSleeping = false
+    @ObservationIgnored private var didLoadDesktopInstallation = false
     @ObservationIgnored private let credentialClearer: (() -> Bool)?
     @ObservationIgnored private let networkFilterDisabler: (() async -> Error?)?
 
@@ -134,6 +135,7 @@ final class GuardStore {
             networkChanges?.onChange = { [weak self] reason, sleeping, waking in self?.environmentChanged(reason, sleeping: sleeping, waking: waking) }
         }
         networkFilter.refresh()
+        synchronizeSandboxRegionalDefaults()
     }
     var title: String {
         if settings.experimentalSandboxEnabled {
@@ -184,7 +186,17 @@ final class GuardStore {
             || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode)
     }
     func refreshDesktopDiscovery() {
+        didLoadDesktopInstallation = true
         desktopInstallation = ClaudeDesktopDiscovery.locate()
+    }
+
+    func loadDesktopInstallationIfNeeded() async {
+        guard !didLoadDesktopInstallation else { return }
+        didLoadDesktopInstallation = true
+        let installation = await Task.detached(priority: .utility) {
+            ClaudeDesktopDiscovery.locate()
+        }.value
+        desktopInstallation = installation
     }
     func log(_ text: String, attention: Bool = false) {
         events.insert(GuardEvent(message: text, isAttention: attention), at: 0)
@@ -236,6 +248,26 @@ final class GuardStore {
         restartEgressAutomation(runImmediately: false)
     }
 
+    @discardableResult
+    func applyCurrentEgressToSandbox() async -> Bool {
+        guard canRunNetworkInspection,
+              let snapshot = await snapshotForEgressAudit(maxAge: 45) else { return false }
+        let report = await egressAudit.run(
+            snapshot: snapshot,
+            includeIntelligence: true,
+            trigger: .manual
+        )
+        synchronizeSandboxRegionalDefaults()
+        return sandbox.sharedConfiguration.usesEgressRegionalDefaults
+            && report?.intelligence.contains(where: {
+                $0.timezone.map { TimeZone(identifier: $0) != nil } == true
+            }) == true
+    }
+
+    private func synchronizeSandboxRegionalDefaults() {
+        sandbox.applyEgressRegionalDefaults(from: egressAudit.report)
+    }
+
     private func restartEgressAutomation(runImmediately: Bool) {
         egressAutomationTask?.cancel()
         egressAutomationTask = nil
@@ -272,6 +304,7 @@ final class GuardStore {
         guard let result = await egressAudit.run(
             snapshot: snapshot, includeIntelligence: false, trigger: trigger
         ) else { return }
+        synchronizeSandboxRegionalDefaults()
         let comparison = egressAudit.comparison
         if result.assessment.level == .attention,
            previousLevel != .attention || comparison?.addedFindings.isEmpty == false {
@@ -599,20 +632,14 @@ final class GuardStore {
             log(
                 session.claudeRunning
                     ? (L10n.resolvedEnglish
-                        ? "Requested an isolated launch of the official Claude Desktop app."
-                        : "已请求启动隔离的官方 Claude Desktop。")
+                        ? "Requested an isolated launch of the official Claude app."
+                        : "已请求启动隔离的官方 Claude。")
                     : session.message,
                 attention: !session.claudeRunning
             )
             return
         }
-        guard let token = authentication.launchToken() else {
-            session.message = L10n.resolvedEnglish
-                ? "Save a Claude Code sign-in token under Tools → Sign-in before launching the isolated session."
-                : "请先在“工具 → 登录凭证”中保存登录凭证，再启动隔离会话。"
-            return
-        }
-        session.launchClaudeCode(token: token)
+        session.launchClaudeCode(token: authentication.launchToken())
         log(
             L10n.resolvedEnglish
                 ? "Requested an isolated Claude Code launch in Terminal."
@@ -819,6 +846,7 @@ final class GuardStore {
         cleanupSelection.removeAll()
         let home = NSHomeDirectory()
         let sessionsRoot = sandbox.cleanupSessionsRoot
+        let workspacesRoot = sandbox.cleanupWorkspacesRoot
         let profilesRoot = sandbox.cleanupProfilesRoot
         let currentSessionRoots = sandbox.currentSessionRoots
         Task {
@@ -826,6 +854,7 @@ final class GuardStore {
                 CacheCleaner.scanWithLiveSafety(
                     home: home,
                     sessionsRoot: sessionsRoot,
+                    workspacesRoot: workspacesRoot,
                     profilesRoot: profilesRoot,
                     currentSessionRoots: currentSessionRoots
                 )
@@ -845,6 +874,7 @@ final class GuardStore {
                         && $0.fileCount > 0
                         && $0.isSelectable
                         && $0.scope != .pastSession
+                        && $0.scope != .workspace
                 }
                 .map(\.id)
         )
@@ -875,6 +905,7 @@ final class GuardStore {
         let includeLocalData = cleanupIncludesLocalData
         let home = NSHomeDirectory()
         let sessionsRoot = sandbox.cleanupSessionsRoot
+        let workspacesRoot = sandbox.cleanupWorkspacesRoot
         let profilesRoot = sandbox.cleanupProfilesRoot
         let currentSessionRoots = sandbox.currentSessionRoots
         Task {
@@ -884,6 +915,7 @@ final class GuardStore {
                     let freshPlan = CacheCleaner.scanWithLiveSafety(
                         home: home,
                         sessionsRoot: sessionsRoot,
+                        workspacesRoot: workspacesRoot,
                         profilesRoot: profilesRoot,
                         currentSessionRoots: currentSessionRoots
                     )
@@ -940,6 +972,7 @@ final class GuardStore {
                     CacheCleaner.scanWithLiveSafety(
                         home: home,
                         sessionsRoot: sessionsRoot,
+                        workspacesRoot: workspacesRoot,
                         profilesRoot: profilesRoot,
                         currentSessionRoots: currentSessionRoots
                     )

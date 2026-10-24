@@ -3,20 +3,45 @@ import GuardCore
 import SwiftUI
 
 struct SandboxScopeSheet: View {
+    @Bindable var store: GuardStore
     @Bindable var sandbox: SandboxCoordinator
+    @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
     @Environment(\.dismiss) private var dismiss
+    @State private var detectingEgress = false
+    @State private var egressNotice = ""
+    @State private var timezoneDraft: String
+    @State private var languageDraft: String
+
+    init(store: GuardStore) {
+        self.store = store
+        self.sandbox = store.sandbox
+        _timezoneDraft = State(initialValue: store.sandbox.sharedConfiguration.timezoneIdentifier)
+        _languageDraft = State(initialValue: store.sandbox.sharedConfiguration.languageIdentifier)
+    }
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
     }
 
+    private var timezoneIsValid: Bool {
+        TimeZone(identifier: timezoneDraft) != nil
+    }
+
+    private var languageIsValid: Bool {
+        IsolationSessionEnvironment.normalizedLanguageIdentifier(languageDraft) != nil
+    }
+
+    private var regionalSettingsAreValid: Bool {
+        timezoneIsValid && languageIsValid
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             sheetHeader(
-                title: text("会话范围", "Session scope"),
+                title: text("共享环境", "Shared environment"),
                 subtitle: text(
-                    "这些设置由两个保护对象共享。系统会为每个目标建立独立的工作副本和交换子目录。",
-                    "These settings are shared by both protected targets. Routekeeper creates a separate workspace and exchange subfolder for each target."
+                    "项目、交换目录、时区、地区与出口默认值由三个 Claude 环境共享；每个环境仍保留独立的工作副本。",
+                    "Project, exchange folder, timezone, region and exit defaults are shared by all three Claude environments, while each keeps its own workspace."
                 )
             )
             AppHairline()
@@ -57,46 +82,161 @@ struct SandboxScopeSheet: View {
                             .padding(12)
                             .appSurface(.inset, corner: 10)
                         }
-                        scopeFieldRow(text("会话时区", "Session timezone")) {
-                            HStack(spacing: 8) {
-                                TextField("Asia/Shanghai", text: $sandbox.sharedConfiguration.timezoneIdentifier)
+                        scopeFieldRow(
+                            text("会话时区", "Session timezone"),
+                            isInvalid: !timezoneIsValid
+                        ) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    TextField("Asia/Shanghai", text: $timezoneDraft)
                                     .textFieldStyle(.roundedBorder)
                                     .accessibilityLabel(text("会话时区", "Session timezone"))
-                                Menu(text("常用", "Presets")) {
-                                    ForEach(timezones, id: \.self) { identifier in
-                                        Button(identifier) {
-                                            sandbox.sharedConfiguration.timezoneIdentifier = identifier
+                                    .disabled(sandbox.sharedConfiguration.usesEgressRegionalDefaults)
+                                    .overlay {
+                                        if !timezoneIsValid {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .stroke(appStatusFailure, lineWidth: 1.5)
                                         }
                                     }
+                                    Menu(text("常用", "Presets")) {
+                                        ForEach(timezones, id: \.self) { identifier in
+                                            Button(identifier) {
+                                                timezoneDraft = identifier
+                                                sandbox.updateTimezoneIdentifier(identifier)
+                                            }
+                                        }
+                                    }
+                                    .fixedSize()
+                                    .disabled(sandbox.sharedConfiguration.usesEgressRegionalDefaults)
                                 }
-                                .fixedSize()
+                                if !timezoneIsValid {
+                                    invalidFieldMessage(text(
+                                        "无效的 IANA 时区，例如 Asia/Shanghai。",
+                                        "Invalid IANA timezone, for example Asia/Shanghai."
+                                    ))
+                                }
                             }
                         }
-                        scopeFieldRow(text("会话语言", "Session language")) {
-                            HStack(spacing: 8) {
-                                TextField("zh-Hans", text: $sandbox.sharedConfiguration.languageIdentifier)
+                        scopeFieldRow(
+                            text("会话语言 / 地区", "Session language / region"),
+                            isInvalid: !languageIsValid
+                        ) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    TextField("zh-Hans", text: $languageDraft)
                                     .textFieldStyle(.roundedBorder)
-                                    .accessibilityLabel(text("会话语言", "Session language"))
-                                Menu(text("常用", "Presets")) {
-                                    ForEach(languages, id: \.identifier) { language in
-                                        Button(language.title) {
-                                            sandbox.sharedConfiguration.languageIdentifier = language.identifier
+                                    .accessibilityLabel(text("会话语言与地区", "Session language and region"))
+                                    .disabled(sandbox.sharedConfiguration.usesEgressRegionalDefaults)
+                                    .overlay {
+                                        if !languageIsValid {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .stroke(appStatusFailure, lineWidth: 1.5)
                                         }
                                     }
+                                    Menu(text("常用", "Presets")) {
+                                        ForEach(languages, id: \.identifier) { language in
+                                            Button(language.title) {
+                                                languageDraft = language.identifier
+                                                sandbox.updateLanguageIdentifier(language.identifier)
+                                            }
+                                        }
+                                    }
+                                    .fixedSize()
+                                    .disabled(sandbox.sharedConfiguration.usesEgressRegionalDefaults)
                                 }
-                                .fixedSize()
+                                if !languageIsValid {
+                                    invalidFieldMessage(text(
+                                        "无效的语言 / 地区标识，例如 zh-Hans 或 en-US。",
+                                        "Invalid language or region identifier, for example zh-Hans or en-US."
+                                    ))
+                                }
                             }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                    if !regionalSettingsAreValid {
+                        HStack(spacing: 10) {
+                            Label(
+                                text(
+                                    "红色配置项无效，当前无法创建会话或打开 Chrome。",
+                                    "The red setting is invalid, so sessions and Chrome cannot start."
+                                ),
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .routekeeperFont(.caption, weight: .semibold)
+                            .foregroundStyle(appStatusFailure)
+                            Spacer()
+                            Button(text("自动修复", "Repair automatically")) {
+                                sandbox.repairRegionalSettings(from: store.egressAudit.report)
+                                syncRegionalDrafts()
+                                egressNotice = text(
+                                    "已用有效的出口或系统默认值修复。",
+                                    "Repaired with a valid exit or system default."
+                                )
+                            }
+                            .routekeeperSecondaryButton(.warning)
+                            .disabled(sandbox.anyActive || sandbox.busy)
+                        }
+                        .padding(10)
+                        .background(
+                            appStatusFailure.opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                    }
+
                     Text(text(
-                        "时区和语言只用于隔离会话与 Claude 网页版，不修改系统设置；语言不再根据时区自动推断。",
-                        "Timezone and language apply only to isolated sessions and Claude on the web; they do not modify macOS settings, and language is no longer inferred from timezone."
+                        "时区和语言只用于隔离会话与 Chrome，不修改系统设置。跟随出口仅在手动查询时获取第三方 IP 地区信息；固定设置不会被出口变化覆盖。",
+                        "Timezone and language apply only to isolated sessions and Chrome, without changing macOS settings. Following the exit uses third-party IP location only when you request it. Fixed settings are never overwritten by exit changes."
                     ))
                     .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .center, spacing: 10) {
+                        Picker(text("时区 / 地区默认值", "Timezone / regional default"), selection: Binding(
+                            get: { sandbox.sharedConfiguration.usesEgressRegionalDefaults },
+                            set: { follow in
+                                sandbox.sharedConfiguration.usesEgressRegionalDefaults = follow
+                                if follow {
+                                    sandbox.applyEgressRegionalDefaults(from: store.egressAudit.report)
+                                    syncRegionalDrafts()
+                                }
+                                egressNotice = ""
+                            }
+                        )) {
+                            Text(text("跟随当前出口", "Follow current exit")).tag(true)
+                            Text(text("手动固定", "Fixed manually")).tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                        if sandbox.sharedConfiguration.usesEgressRegionalDefaults {
+                            Button {
+                                detectingEgress = true
+                                egressNotice = ""
+                                includeIntelligence = true
+                                Task {
+                                    let applied = await store.applyCurrentEgressToSandbox()
+                                    detectingEgress = false
+                                    egressNotice = applied
+                                        ? text("已按当前出口更新。", "Updated for the current exit.")
+                                        : text("未取得出口时区。请完成网络体检，或改为手动固定。",
+                                               "No exit timezone was found. Run a network check or set the values manually.")
+                                }
+                            } label: {
+                                if detectingEgress {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Text(text("按当前出口设置", "Use current exit"))
+                                }
+                            }
+                            .routekeeperSecondaryButton(.warning)
+                            .disabled(detectingEgress || store.egressAudit.busy || store.checking)
+                        }
+                    }
+                    if !egressNotice.isEmpty {
+                        Text(egressNotice)
+                            .routekeeperFont(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 8)
@@ -120,10 +260,48 @@ struct SandboxScopeSheet: View {
                     dismiss()
                 }
                     .keyboardShortcut(.defaultAction)
+                    .disabled(!regionalSettingsAreValid)
             }
         }
         .padding(20)
         .frame(minWidth: 640, minHeight: 450)
+        .onAppear {
+            syncRegionalDrafts()
+        }
+        .onChange(of: sandbox.sharedConfiguration.timezoneIdentifier) { _, value in
+            if timezoneDraft != value {
+                timezoneDraft = value
+            }
+        }
+        .onChange(of: sandbox.sharedConfiguration.languageIdentifier) { _, value in
+            if languageDraft != value {
+                languageDraft = value
+            }
+        }
+        .onChange(of: timezoneDraft) { _, value in
+            guard !sandbox.sharedConfiguration.usesEgressRegionalDefaults,
+                  TimeZone(identifier: value) != nil,
+                  value != sandbox.sharedConfiguration.timezoneIdentifier else { return }
+            sandbox.updateTimezoneIdentifier(value)
+        }
+        .onChange(of: languageDraft) { _, value in
+            guard !sandbox.sharedConfiguration.usesEgressRegionalDefaults,
+                  IsolationSessionEnvironment.normalizedLanguageIdentifier(value) != nil,
+                  value != sandbox.sharedConfiguration.languageIdentifier else { return }
+            sandbox.updateLanguageIdentifier(value)
+        }
+    }
+
+    private func syncRegionalDrafts() {
+        timezoneDraft = sandbox.sharedConfiguration.timezoneIdentifier
+        languageDraft = sandbox.sharedConfiguration.languageIdentifier
+    }
+
+    private func invalidFieldMessage(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.circle.fill")
+            .routekeeperFont(.caption)
+            .foregroundStyle(appStatusFailure)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var timezones: [String] {
@@ -160,10 +338,18 @@ struct SandboxScopeSheet: View {
 
     private func scopeFieldRow<Content: View>(
         _ label: String,
+        isInvalid: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
         GridRow(alignment: .firstTextBaseline) {
-            Text(label)
+            Label {
+                Text(label)
+            } icon: {
+                if isInvalid {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+            }
+            .foregroundStyle(isInvalid ? appStatusFailure : Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)

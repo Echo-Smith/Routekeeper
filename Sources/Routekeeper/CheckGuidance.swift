@@ -7,7 +7,7 @@ extension CheckItem {
     var nextStep: String {
         let en = L10n.resolvedEnglish
         switch id {
-        case "target", "alternate-target", "stack-ipv4", "stack-ipv6":
+        case "target", "alternate-target", "stack-ipv4", "stack-ipv6", "claude-trace-exit":
             return en ? "Next: set the expected fixed exit IP in Network protection, then check again." : "下一步：在“网络保护”中填写对应的固定出口 IP，再重新检查。"
         case "scope", "desktop", "code":
             return en ? "Next: install the selected Claude app, or deselect it in Network protection." : "下一步：安装所选 Claude 应用，或在“网络保护”中取消保护未安装的应用。"

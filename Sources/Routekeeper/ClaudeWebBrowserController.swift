@@ -49,6 +49,7 @@ final class ClaudeWebBrowserController {
     @ObservationIgnored private var pendingExpectedExits = IsolationExpectedExits()
     @ObservationIgnored private var egressValidationTask: Task<Void, Never>?
     @ObservationIgnored private var egressValidationGeneration = UUID()
+    @ObservationIgnored private var configurationValidationMessage: String?
 
     private static let profileMarkerName = ".routekeeper-profile"
 
@@ -77,12 +78,12 @@ final class ClaudeWebBrowserController {
             )
             : detectedInstallation == nil
             ? Self.text(
-                "未检测到 Google Chrome。安装官方版本后即可在独立配置中打开 Claude 网页版。",
-                "Google Chrome was not found. Install the official browser to open Claude on the web in a dedicated profile."
+                "未检测到 Google Chrome。安装官方版本后即可在独立配置中打开 Chrome。",
+                "Google Chrome was not found. Install the official browser to open Chrome in a dedicated profile."
             )
             : Self.text(
-                "使用独立 Chrome 配置打开 Claude 网页版；不会导入宿主浏览器的 Cookie、密码、历史或扩展。",
-                "Open Claude on the web in a dedicated Chrome profile without importing host cookies, passwords, history or extensions."
+                "使用独立 Chrome 配置访问 Claude；不会导入宿主浏览器的 Cookie、密码、历史或扩展。",
+                "Use a dedicated Chrome profile for Claude without importing host cookies, passwords, history or extensions."
             )
     }
 
@@ -98,11 +99,11 @@ final class ClaudeWebBrowserController {
         case .launching:
             return Self.text("正在打开 Chrome", "Opening Chrome")
         case .running:
-            return Self.text("Claude 网页版正在运行", "Claude on the web is running")
+            return Self.text("Chrome 正在运行", "Chrome is running")
         case .networkPaused:
-            return Self.text("网页版网络已暂停", "Web browser network paused")
+            return Self.text("Chrome 网络已暂停", "Chrome network paused")
         case .failed:
-            return Self.text("网页版未能启动", "The web browser could not start")
+            return Self.text("Chrome 未能启动", "Chrome could not start")
         }
     }
 
@@ -134,6 +135,13 @@ final class ClaudeWebBrowserController {
         phase == .networkPaused && lastUpstream != nil && !busy
     }
 
+    var showsReadySummary: Bool {
+        phase == .stopped
+            && installation != nil
+            && !discovering
+            && configurationValidationMessage == nil
+    }
+
     var downloadPath: String { downloadsURL.path }
     var profilePath: String { profileRoot.path }
     var egressWarning: String? {
@@ -156,11 +164,21 @@ final class ClaudeWebBrowserController {
                 "未检测到 Google Chrome 官方应用。Routekeeper 不内置浏览器，也不会使用来源不明的 Chromium。",
                 "The official Google Chrome app was not found. Routekeeper does not bundle a browser or use an unverified Chromium build."
             )
-        } else if detected != nil, phase == .failed {
-            phase = .stopped
+        } else if detected != nil,
+                  !phase.isRunning,
+                  let existingPIDs = profileProcessIdentifiers(),
+                  !existingPIDs.isEmpty,
+                  Self.isOwnedProfile(at: profileRoot) {
+            phase = .failed
             message = Self.text(
-                "Google Chrome 已就绪。网页版会使用独立配置和当前会话的语言、时区与代理。",
-                "Google Chrome is ready. The web browser will use a dedicated profile with the current session language, timezone and proxy."
+                "检测到上次由 Routekeeper 打开的专用 Chrome 仍在运行。点击“重试”会先关闭该专用实例，再用当前共享设置重新打开；宿主 Chrome 不受影响。",
+                "A dedicated Chrome instance opened by Routekeeper is still running. Retry closes that dedicated instance and reopens it with the current shared settings; your host Chrome is not affected."
+            )
+        } else if detected != nil, !phase.isRunning {
+            phase = .stopped
+            message = configurationValidationMessage ?? Self.text(
+                "Google Chrome 已就绪。Chrome 会使用独立配置和当前会话的语言、时区与代理。",
+                "Google Chrome is ready. Chrome will use a dedicated profile with the current session language, timezone and proxy."
             )
         }
     }
@@ -171,27 +189,37 @@ final class ClaudeWebBrowserController {
     }
 
     func sharedConfigurationDidChange(_ configuration: SandboxSharedConfiguration) {
-        guard !busy, !phase.isRunning, phase == .failed else { return }
+        // Valid edits must also replace a previous invalid-settings message.
+        guard !busy, !phase.isRunning else { return }
         phase = .stopped
+        configurationValidationMessage = nil
         if installation == nil {
             message = Self.text(
                 "未检测到 Google Chrome。请先安装 Google 官方版本。",
                 "Google Chrome was not found. Install the official Google build first."
             )
-        } else if !configuration.hasValidTimezone || !configuration.hasValidLanguage {
+        } else if !configuration.hasValidTimezone {
             message = Self.text(
-                "会话时区或语言仍无效，请编辑共享设置后再打开网页版。",
-                "The session timezone or language is still invalid. Edit the shared settings before opening Claude on the web."
+                "会话时区“\(configuration.timezoneIdentifier)”无效，请修正红色配置后再打开 Chrome。",
+                "The session timezone \"\(configuration.timezoneIdentifier)\" is invalid. Fix the red setting before opening Chrome."
             )
+            configurationValidationMessage = message
+        } else if !configuration.hasValidLanguage {
+            message = Self.text(
+                "会话语言“\(configuration.languageIdentifier)”无效，请修正红色配置后再打开 Chrome。",
+                "The session language \"\(configuration.languageIdentifier)\" is invalid. Fix the red setting before opening Chrome."
+            )
+            configurationValidationMessage = message
         } else if !configuration.upstream.isValid {
             message = Self.text(
                 "上游代理仍需有效的本机回环地址和端口，请编辑共享设置后重试。",
                 "The upstream proxy still needs a valid loopback host and port. Edit the shared settings and try again."
             )
+            configurationValidationMessage = message
         } else {
             message = Self.text(
-                "共享设置已更新，可以重新打开 Claude 网页版。",
-                "Shared settings were updated. Claude on the web can be opened again."
+                "共享设置已更新，可以重新打开 Chrome。",
+                "Shared settings were updated. Chrome can be opened again."
             )
         }
     }
@@ -229,8 +257,8 @@ final class ClaudeWebBrowserController {
         guard pendingLaunchWarning != nil else { return }
         clearPendingLaunch()
         message = egressReport?.detail ?? Self.text(
-            "已取消打开 Claude 网页版。",
-            "Opening Claude on the web was cancelled."
+            "已取消打开 Chrome。",
+            "Opening Chrome was cancelled."
         )
     }
 
@@ -249,13 +277,20 @@ final class ClaudeWebBrowserController {
             phase = .failed
             return false
         }
-        guard TimeZone(identifier: configuration.timezoneIdentifier) != nil,
-              let language = IsolationSessionEnvironment.normalizedLanguageIdentifier(
-                configuration.languageIdentifier
-              ) else {
+        guard TimeZone(identifier: configuration.timezoneIdentifier) != nil else {
             message = Self.text(
-                "请先设置有效的会话时区和语言。",
-                "Set a valid session timezone and language first."
+                "会话时区“\(configuration.timezoneIdentifier)”无效，请修正红色配置后再试。",
+                "The session timezone \"\(configuration.timezoneIdentifier)\" is invalid. Fix the red setting and try again."
+            )
+            phase = .failed
+            return false
+        }
+        guard let language = IsolationSessionEnvironment.normalizedLanguageIdentifier(
+            configuration.languageIdentifier
+        ) else {
+            message = Self.text(
+                "会话语言“\(configuration.languageIdentifier)”无效，请修正红色配置后再试。",
+                "The session language \"\(configuration.languageIdentifier)\" is invalid. Fix the red setting and try again."
             )
             phase = .failed
             return false
@@ -270,19 +305,43 @@ final class ClaudeWebBrowserController {
         }
         guard let existingPIDs = profileProcessIdentifiers() else {
             message = Self.text(
-                "无法核验独立 Chrome Profile 是否已被占用，已拒绝启动。",
+                "无法核验独立 Chrome 配置是否已被占用，已拒绝启动。",
                 "Could not verify whether the dedicated Chrome profile is in use, so the launch was refused."
             )
             phase = .failed
             return false
         }
-        guard existingPIDs.isEmpty else {
+        if !existingPIDs.isEmpty {
+            guard Self.isOwnedProfile(at: profileRoot) else {
+                message = Self.text(
+                    "独立 Chrome 配置已被另一个 Chrome 进程占用，且无法确认它由 Routekeeper 创建。请先关闭该窗口。",
+                    "The dedicated Chrome profile is in use by a Chrome process that Routekeeper cannot verify. Close that window first."
+                )
+                phase = .failed
+                return false
+            }
             message = Self.text(
-                "独立 Chrome Profile 已被另一个 Routekeeper 浏览器进程占用。请先关闭该窗口。",
-                "The dedicated Chrome profile is already used by another Routekeeper browser process. Close that window first."
+                "检测到上次启动的专用 Chrome 仍在运行，正在先关闭该专用实例再重新打开。宿主 Chrome 不受影响。",
+                "A previously launched dedicated Chrome instance is still running. Routekeeper is closing that dedicated instance before reopening it; your host Chrome is not affected."
             )
-            phase = .failed
-            return false
+            phase = .launching
+            await terminateProfileProcesses(existingPIDs)
+            guard let remainingPIDs = profileProcessIdentifiers() else {
+                message = Self.text(
+                    "无法确认专用 Chrome 是否已退出，已停止本次启动。",
+                    "Routekeeper could not confirm that the dedicated Chrome exited, so this launch was stopped."
+                )
+                phase = .failed
+                return false
+            }
+            guard remainingPIDs.isEmpty else {
+                message = Self.text(
+                    "专用 Chrome 仍在运行，无法安全复用同一配置。请稍后重试。",
+                    "The dedicated Chrome is still running, so the profile cannot be reused safely. Try again shortly."
+                )
+                phase = .failed
+                return false
+            }
         }
 
         busy = true
@@ -297,12 +356,13 @@ final class ClaudeWebBrowserController {
                 "Checking the Claude exit through the Routekeeper relay."
             )
             : Self.text(
-                "正在以独立 Chrome 配置打开 Claude 网页版。",
-                "Opening Claude on the web in a dedicated Chrome profile."
+                "正在以独立 Chrome 配置打开 Chrome。",
+                "Opening Chrome in a dedicated Chrome profile."
             )
 
         do {
             try prepareOwnedProfile(languageIdentifier: language, timezoneIdentifier: configuration.timezoneIdentifier)
+            try Self.markProfileCleanlyExited(profileURL: profileURL)
             _ = try relay.start(upstream: configuration.upstream)
             guard let proxyURL = relay.socks5URL() else { throw LocalRelayError.stopped }
             if verifyEgress {
@@ -370,13 +430,13 @@ final class ClaudeWebBrowserController {
             phase = .running
             if let report = egressReport, !report.isVerified {
                 message = Self.text(
-                    "已按你的选择打开 Claude 网页版，但出口检查仍需确认：\(report.detail)",
-                    "Claude on the web opened as requested, but the exit check still needs attention: \(report.detail)"
+                    "已按你的选择打开 Chrome，但出口检查仍需确认：\(report.detail)",
+                    "Chrome opened as requested, but the exit check still needs attention: \(report.detail)"
                 )
             } else {
                 message = Self.text(
-                    "已通过 Routekeeper 中继打开 Claude 网页版；Claude 出口与固定目标一致，Chrome 原生沙箱保持启用。",
-                    "Claude on the web is open through the Routekeeper relay; its exit matches the fixed target and Chrome's native sandbox remains enabled."
+                    "已通过 Routekeeper 中继打开 Chrome；Claude 出口与固定目标一致，Chrome 原生沙箱保持启用。",
+                    "Chrome is open through the Routekeeper relay; its exit matches the fixed target and Chrome's native sandbox remains enabled."
                 )
             }
             return true
@@ -389,8 +449,8 @@ final class ClaudeWebBrowserController {
             busy = false
             phase = .failed
             message = Self.text(
-                "无法打开 Claude 网页版：\(error.localizedDescription)",
-                "Could not open Claude on the web: \(error.localizedDescription)"
+                "无法打开 Chrome：\(error.localizedDescription)",
+                "Could not open Chrome: \(error.localizedDescription)"
             )
             return false
         }
@@ -404,8 +464,8 @@ final class ClaudeWebBrowserController {
         phase = .networkPaused
         pausedByEnvironment = false
         message = Self.text(
-            "Routekeeper 中继已暂停；Chrome 仍保持打开，但 Claude 网页版无法继续联网。",
-            "The Routekeeper relay is paused. Chrome remains open, but Claude on the web cannot continue networking."
+            "Routekeeper 中继已暂停；Chrome 仍保持打开，但当前无法继续联网。",
+            "The Routekeeper relay is paused. Chrome remains open, but Chrome cannot continue networking."
         )
     }
 
@@ -419,13 +479,13 @@ final class ClaudeWebBrowserController {
             phase = .networkPaused
             pausedByEnvironment = true
             message = Self.text(
-                "系统休眠前已暂停网页版网络。唤醒后请确认代理仍可用，再手动恢复网络。",
-                "The web browser network was paused before sleep. After waking, confirm the proxy is available and restore it manually."
+                "系统休眠前已暂停 Chrome 网络。唤醒后请确认代理仍可用，再手动恢复网络。",
+                "Chrome networking was paused before sleep. After waking, confirm the proxy is available and restore it manually."
             )
         } else if waking, phase == .networkPaused, pausedByEnvironment {
             message = Self.text(
-                "系统已唤醒，网页版网络仍保持暂停。确认代理可用后手动恢复，避免沿用旧网络状态。",
-                "The Mac woke, but the web browser network remains paused. Confirm the proxy is available before restoring it."
+                "系统已唤醒，Chrome 网络仍保持暂停。确认代理可用后手动恢复，避免沿用旧网络状态。",
+                "The Mac woke, but Chrome networking remains paused. Confirm the proxy is available before restoring it."
             )
         } else if phase == .running {
             scheduleEgressValidation(reason: reason)
@@ -466,8 +526,8 @@ final class ClaudeWebBrowserController {
             busy = false
             phase = .failed
             message = Self.text(
-                "无法恢复网页版网络：\(error.localizedDescription)",
-                "Could not restore the browser network: \(error.localizedDescription)"
+                "无法恢复 Chrome 网络：\(error.localizedDescription)",
+                "Could not restore Chrome networking: \(error.localizedDescription)"
             )
             return false
         }
@@ -538,6 +598,7 @@ final class ClaudeWebBrowserController {
         for pid in pids where Darwin.kill(pid, 0) == 0 {
             _ = Darwin.kill(pid, SIGKILL)
         }
+        try? Self.markProfileCleanlyExited(profileURL: profileURL)
         process = nil
         closeLog()
         lastUpstream = nil
@@ -550,8 +611,8 @@ final class ClaudeWebBrowserController {
         phase = .stopped
         busy = false
         message = Self.text(
-            "浏览器已关闭；独立 Profile 和网页版登录状态仍保留。",
-            "The browser is closed. Its dedicated profile and web sign-in remain saved."
+            "Chrome 已关闭；独立配置和登录状态仍保留。",
+            "Chrome is closed. Its dedicated profile and sign-in state remain saved."
         )
     }
 
@@ -560,11 +621,19 @@ final class ClaudeWebBrowserController {
         if phase.isRunning || phase == .launching {
             await stop()
         }
-        if let pids = profileProcessIdentifiers(), !pids.isEmpty {
+        guard let pids = profileProcessIdentifiers() else {
             phase = .failed
             message = Self.text(
-                "独立 Chrome Profile 仍被 Routekeeper 浏览器进程占用，未删除任何数据。",
-                "The dedicated Chrome profile is still in use by a Routekeeper browser process; no data was removed."
+                "无法核验独立 Chrome 配置是否仍被占用，未删除任何数据。",
+                "Could not verify whether the dedicated Chrome profile is still in use; no data was removed."
+            )
+            return false
+        }
+        if !pids.isEmpty {
+            phase = .failed
+            message = Self.text(
+                "独立 Chrome 配置仍被 Routekeeper Chrome 进程占用，未删除任何数据。",
+                "The dedicated Chrome profile is still in use by a Routekeeper Chrome process; no data was removed."
             )
             return false
         }
@@ -572,8 +641,8 @@ final class ClaudeWebBrowserController {
             profileAvailable = false
             phase = .stopped
             message = Self.text(
-                "没有找到由 Routekeeper 创建的 Claude 网页版 Profile。",
-                "No Routekeeper-owned Claude web profile was found."
+                "没有找到由 Routekeeper 创建的 Chrome 配置。",
+                "No Routekeeper-owned Chrome profile was found."
             )
             return false
         }
@@ -582,15 +651,15 @@ final class ClaudeWebBrowserController {
             profileAvailable = false
             phase = .stopped
             message = Self.text(
-                "已清除 Claude 网页版的独立 Profile、Cookie 和下载目录。",
-                "The Claude web profile, cookies and download directory were removed."
+                "已清除 Chrome 的独立配置、Cookie 和下载目录。",
+                "The Chrome profile, cookies and download directory were removed."
             )
             return true
         } catch {
             phase = .failed
             message = Self.text(
-                "无法清除网页版 Profile：\(error.localizedDescription)",
-                "Could not remove the web profile: \(error.localizedDescription)"
+                "无法清除 Chrome 配置：\(error.localizedDescription)",
+                "Could not remove the Chrome profile: \(error.localizedDescription)"
             )
             return false
         }
@@ -624,6 +693,31 @@ final class ClaudeWebBrowserController {
             "--new-window",
             ClaudeWebBrowserDiscovery.claudeURL.absoluteString
         ]
+    }
+
+    nonisolated static func markProfileCleanlyExited(profileURL: URL) throws {
+        let preferencesURL = profileURL
+            .appendingPathComponent("Claude", isDirectory: true)
+            .appendingPathComponent("Preferences", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: preferencesURL.path) else { return }
+
+        let data = try Data(contentsOf: preferencesURL)
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CocoaError(.propertyListReadCorrupt)
+        }
+        var profile = root["profile"] as? [String: Any] ?? [:]
+        profile["exit_type"] = "Normal"
+        profile["exited_cleanly"] = true
+        root["profile"] = profile
+        let updated = try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.sortedKeys]
+        )
+        try updated.write(to: preferencesURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: preferencesURL.path
+        )
     }
 
     nonisolated static func launchEnvironment(
@@ -667,28 +761,7 @@ final class ClaudeWebBrowserController {
         timezoneIdentifier: String
     ) throws {
         let fileManager = FileManager.default
-        let marker = profileRoot.appendingPathComponent(Self.profileMarkerName)
-        if fileManager.fileExists(atPath: profileRoot.path) {
-            guard fileManager.fileExists(atPath: marker.path) else {
-                throw NSError(
-                    domain: "Routekeeper.ClaudeWeb",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: Self.text(
-                        "网页版 Profile 已存在，但不是由 Routekeeper 创建。为避免覆盖现有数据，已拒绝使用。",
-                        "A web profile already exists but was not created by Routekeeper. It was left untouched to avoid overwriting existing data."
-                    )]
-                )
-            }
-        } else {
-            try fileManager.createDirectory(
-                at: profileRoot,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try Data("Routekeeper Claude web browser profile\n".utf8)
-                .write(to: marker, options: .atomic)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
-        }
+        try Self.ensureOwnedProfileRoot(at: profileRoot)
         for directory in [
             profileURL,
             homeURL,
@@ -724,6 +797,61 @@ final class ClaudeWebBrowserController {
         profileAvailable = true
     }
 
+    /// Claims an existing dedicated profile only when every top-level entry is
+    /// one Routekeeper manages. Existing browser data is never modified.
+    @discardableResult
+    static func ensureOwnedProfileRoot(at root: URL) throws -> Bool {
+        let fileManager = FileManager.default
+        let marker = root.appendingPathComponent(profileMarkerName)
+        let managedEntries: Set<String> = [
+            profileMarkerName, "ChromeProfile", "Home", "Temp",
+            "Downloads", "Cache", "Logs"
+        ]
+
+        if fileManager.fileExists(atPath: root.path) {
+            let values = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw ownershipError()
+            }
+            if fileManager.fileExists(atPath: marker.path) {
+                let markerValues = try marker.resourceValues(
+                    forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                )
+                guard markerValues.isRegularFile == true,
+                      markerValues.isSymbolicLink != true else {
+                    throw ownershipError()
+                }
+                return false
+            }
+            let entries = try fileManager.contentsOfDirectory(atPath: root.path)
+            guard Set(entries).isSubset(of: managedEntries) else {
+                throw ownershipError()
+            }
+        } else {
+            try fileManager.createDirectory(
+                at: root,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+
+        try Data("Routekeeper Claude web browser profile\n".utf8)
+            .write(to: marker, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+        return true
+    }
+
+    private static func ownershipError() -> NSError {
+        NSError(
+            domain: "Routekeeper.ClaudeWeb",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: text(
+                "Chrome 配置目录包含未知内容或符号链接。为避免覆盖现有数据，已拒绝使用。",
+                "The Chrome profile directory contains unknown content or a symbolic link. It was left untouched to avoid overwriting existing data."
+            )]
+        )
+    }
+
     private func browserTerminated(_ terminated: Process, generation: UUID) async {
         guard launchGeneration == generation else { return }
         egressValidationTask?.cancel()
@@ -741,14 +869,14 @@ final class ClaudeWebBrowserController {
         if terminated.terminationReason == .uncaughtSignal || terminated.terminationStatus != 0 || shortLived {
             phase = .failed
             message = Self.text(
-                "Chrome 启动后立即退出。请确认没有其他窗口占用同一 Routekeeper Profile，然后重试。",
+                "Chrome 启动后立即退出。请确认没有其他窗口占用同一 Routekeeper 配置，然后重试。",
                 "Chrome exited immediately. Make sure no other window is using the same Routekeeper profile, then try again."
             )
         } else {
             phase = .stopped
             message = Self.text(
-                "浏览器已关闭；独立 Profile 和网页版登录状态仍保留。",
-                "The browser is closed. Its dedicated profile and web sign-in remain saved."
+                "Chrome 已关闭；独立配置和登录状态仍保留。",
+                "Chrome is closed. Its dedicated profile and sign-in state remain saved."
             )
         }
     }
@@ -764,11 +892,31 @@ final class ClaudeWebBrowserController {
         pendingExpectedExits = IsolationExpectedExits()
     }
 
+    private func terminateProfileProcesses(_ initialPIDs: Set<pid_t>) async {
+        for pid in initialPIDs where Darwin.kill(pid, 0) == 0 {
+            _ = Darwin.kill(pid, SIGTERM)
+        }
+        for _ in 0..<20 {
+            let remaining = profileProcessIdentifiers() ?? []
+            if remaining.isEmpty { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let remaining = profileProcessIdentifiers() ?? initialPIDs
+        for pid in remaining where Darwin.kill(pid, 0) == 0 {
+            _ = Darwin.kill(pid, SIGKILL)
+        }
+        for _ in 0..<10 {
+            if profileProcessIdentifiers()?.isEmpty == true { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     private func profileProcessIdentifiers() -> Set<pid_t>? {
         let result = Command.run(
             "/bin/ps",
             ["-ww", "-axo", "pid=,command="],
-            timeout: 2
+            timeout: 2,
+            outputLimit: 2_000_000
         )
         guard result.status == 0 else { return nil }
         let marker = "--user-data-dir=\(profileURL.path)"

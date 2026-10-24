@@ -362,8 +362,9 @@ struct GuardApp: App {
                 .background(WindowCommandBridge(delegate: appDelegate))
                 .task {
                     appDelegate.configureStatusItem(store: store)
-                    if store.snapshot == nil { await store.check() }
                     store.startEgressAuditAutomation()
+                    if store.snapshot == nil { await store.check() }
+                    await store.loadDesktopInstallationIfNeeded()
                 }
         }
         .windowStyle(.automatic)
@@ -408,25 +409,136 @@ struct GuardApp: App {
 }
 
 @MainActor
-func confirmQuit(_ store: GuardStore) {
-    let sandboxActive = store.sandbox.phase.isActive
-    if store.monitoring || sandboxActive {
-        let alert = NSAlert()
-        if sandboxActive {
-            alert.messageText = "退出后将结束沙箱会话"
-            alert.informativeText = "Routekeeper 会先终止本次隔离的 Claude 进程并关闭本地中继。沙箱工作副本会保留，原项目不会被自动修改。"
-            alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "结束沙箱并退出")
-        } else {
-            alert.messageText = "退出后将停止监控"
-            alert.informativeText = "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在网络保护或系统设置中关闭。"
-            alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "停止监控并退出")
+enum QuitConfirmationStep: Equatable {
+    case sandbox
+    case monitoring
+}
+
+enum QuitConfirmationPlan {
+    static func steps(monitoring: Bool, sandboxModeEnabled: Bool) -> [QuitConfirmationStep] {
+        if sandboxModeEnabled {
+            return [.sandbox]
         }
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        return monitoring ? [.monitoring] : []
     }
-    Task {
+}
+
+@MainActor
+func confirmQuit(_ store: GuardStore) {
+    Task { @MainActor in
+        let steps = QuitConfirmationPlan.steps(
+            monitoring: store.monitoring,
+            sandboxModeEnabled: store.settings.experimentalSandboxEnabled
+        )
+        for step in steps {
+            guard await confirm(step: step) else { return }
+        }
         await store.prepareForTermination()
         NSApplication.shared.terminate(nil)
     }
+}
+
+@MainActor
+private func confirm(step: QuitConfirmationStep) async -> Bool {
+    guard let parent = NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0.isVisible }) else {
+        return false
+    }
+
+    let presentation = quitConfirmationPresentation(for: step)
+    return await withCheckedContinuation { continuation in
+        var didFinish = false
+        let root = RoutekeeperConfirmationCard(
+            symbol: presentation.symbol,
+            tint: presentation.tint,
+            title: presentation.title,
+            stepLabel: presentation.stepLabel,
+            message: presentation.message,
+            cancelTitle: quitText("取消", "Cancel"),
+            confirmTitle: presentation.confirmTitle,
+            isDestructive: presentation.isDestructive,
+            onCancel: {
+                guard !didFinish else { return }
+                didFinish = true
+                parent.endSheet(presentation.window, returnCode: .cancel)
+            },
+            onConfirm: {
+                guard !didFinish else { return }
+                didFinish = true
+                parent.endSheet(presentation.window, returnCode: .OK)
+            }
+        )
+        let hostingController = NSHostingController(rootView: root)
+        if #available(macOS 13.0, *) {
+            hostingController.sizingOptions = [.preferredContentSize]
+        }
+        presentation.window.contentViewController = hostingController
+        presentation.window.styleMask = [.titled]
+        presentation.window.titleVisibility = .hidden
+        presentation.window.titlebarAppearsTransparent = true
+        presentation.window.isReleasedWhenClosed = false
+        presentation.window.setContentSize(hostingController.view.fittingSize)
+        parent.beginSheet(presentation.window) { response in
+            if !didFinish {
+                didFinish = true
+            }
+            continuation.resume(returning: response == .OK)
+        }
+    }
+}
+
+@MainActor
+private struct QuitConfirmationPresentation {
+    let window = NSWindow(
+        contentRect: .zero,
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    let symbol: String
+    let tint: Color
+    let title: String
+    let stepLabel: String
+    let message: String
+    let confirmTitle: String
+    let isDestructive: Bool
+}
+
+@MainActor
+private func quitConfirmationPresentation(for step: QuitConfirmationStep) -> QuitConfirmationPresentation {
+    switch step {
+    case .sandbox:
+        return .init(
+            symbol: "power.circle.fill",
+            tint: .red,
+            title: quitText("确认结束沙箱并退出？", "End the sandbox and quit?"),
+            stepLabel: quitText("退出确认", "Quit confirmation"),
+            message: quitText(
+                "Routekeeper 将先终止隔离进程、关闭沙箱网络并结束会话，然后退出应用。工作副本与共享配置会保留，原项目不会被自动修改；沙箱内尚未保存的工作会中断。",
+                "Routekeeper will terminate isolated processes, disable sandbox networking and end sessions before quitting. Workspaces and shared settings are retained, original projects are not modified automatically, and unsaved sandbox work will be interrupted."
+            ),
+            confirmTitle: quitText("结束沙箱并退出", "End Sandbox and Quit"),
+            isDestructive: true
+        )
+    case .monitoring:
+        return .init(
+            symbol: "pause.circle.fill",
+            tint: .orange,
+            title: quitText("退出后将停止监控", "Quitting will stop monitoring"),
+            stepLabel: quitText("退出确认", "Quit confirmation"),
+            message: quitText(
+                "Claude 和代理客户端会保持当前状态。已独立启用的系统过滤器会继续生效，需在网络保护或系统设置中关闭。",
+                "Claude and the proxy client remain in their current state. A separately enabled system filter stays active and must be turned off in Network Protection or System Settings."
+            ),
+            confirmTitle: quitText("停止监控并退出", "Stop Monitoring and Quit"),
+            isDestructive: true
+        )
+    }
+}
+
+private func quitText(_ zh: String, _ en: String) -> String {
+    L10n.resolvedEnglish ? en : zh
 }
 
 struct GuardMenu: View {
