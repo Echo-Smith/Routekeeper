@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security policy / 安全策略
+    url: https://github.com/Echo-Smith/Routekeeper/security/policy
+    about: Do not publish exploit details. Follow SECURITY.md for private or minimal disclosure.
+  - name: Contribution guide / 贡献指南
+    url: https://github.com/Echo-Smith/Routekeeper/blob/main/CONTRIBUTING.md
+    about: Read the licensing, privacy, testing and security-boundary requirements first.
+  - name: Chinese README / 中文说明
+    url: https://github.com/Echo-Smith/Routekeeper/blob/main/README.zh-CN.md
+    about: Check installation, usage, limitations and troubleshooting guidance.

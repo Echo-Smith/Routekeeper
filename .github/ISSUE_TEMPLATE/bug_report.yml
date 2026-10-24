@@ -1,0 +1,128 @@
+name: Bug report / 缺陷报告
+description: Report a reproducible bug, launch failure, verification failure or safety-boundary issue.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Routekeeper. Please remove credentials, cookies,
+        tokens, real public IP addresses, usernames, home paths, private URLs,
+        signing profiles and unredacted reports before submitting.
+
+        感谢反馈。提交前请删除凭据、Cookie、Token、真实公网 IP、用户名、个人路径、
+        私有链接、签名描述文件和未脱敏报告。
+
+        Do not publish exploit details here. See
+        [SECURITY.md](https://github.com/Echo-Smith/Routekeeper/blob/main/SECURITY.md)
+        for the security reporting process.
+
+  - type: input
+    id: version
+    attributes:
+      label: Routekeeper version / 版本
+      description: Include the app version and build number shown in About.
+      placeholder: "Example: 0.3.12 (build 24)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build_source
+    attributes:
+      label: Build source / 构建来源
+      options:
+        - GitHub Release DMG
+        - Built from source
+        - Older or unknown build
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: macOS and hardware / 系统与硬件
+      description: Include macOS version and Apple Silicon or Intel architecture.
+      placeholder: "macOS 15.x; Apple Silicon"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area / 影响范围
+      options:
+        - App launch, menus or navigation
+        - Network check or monitoring
+        - Proxy gateway verification
+        - Experimental sandbox: Claude
+        - Experimental sandbox: Claude Code
+        - Experimental sandbox: Chrome
+        - Credentials or Keychain
+        - Cleanup, export or privacy
+        - Accessibility
+        - Documentation or packaging
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sandbox_state
+    attributes:
+      label: Sandbox state / 沙箱状态
+      options:
+        - Sandbox disabled
+        - Sandbox enabled, no session running
+        - Sandbox session running
+        - Sandbox session network paused
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+      description: Use numbered steps and include the minimum setup needed to reproduce.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 实际行为
+      description: State whether the issue is reproducible every time or intermittently.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence / 脱敏证据
+      description: Optional screenshots or short log excerpts. Do not upload complete local data stores.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Submission checks / 提交确认
+      options:
+        - label: I searched existing issues and did not find the same problem.
+          required: true
+        - label: I removed credentials, cookies, tokens, real IP addresses, personal paths and private data.
+          required: true
+        - label: I understand that Routekeeper is a process-level aid, not a virtual machine or whole-Mac firewall.
+          required: true
