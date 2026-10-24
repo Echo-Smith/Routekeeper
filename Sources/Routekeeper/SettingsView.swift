@@ -1,3 +1,4 @@
+import AppKit
 import GuardCore
 import SwiftUI
 
@@ -5,7 +6,9 @@ struct AppSettingsView: View {
     @Bindable var store: GuardStore
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
+    @State private var updateChecker = AppUpdateChecker()
     @State private var showDisclaimer = false
+    @State private var showUpdateAlert = false
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -41,6 +44,21 @@ struct AppSettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("settings-text-scale")
+                LabeledContent {
+                    HStack(spacing: 10) {
+                        updateStatus
+                        Button(text("检查更新", "Check for updates")) {
+                            checkForUpdates()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(updateChecker.state == .checking)
+                        .accessibilityIdentifier("settings-check-updates")
+                    }
+                } label: {
+                    Label(text("软件更新", "Software update"),
+                          systemImage: "arrow.triangle.2.circlepath")
+                }
             } header: {
                 Text(text("通用", "General"))
             }
@@ -71,7 +89,55 @@ struct AppSettingsView: View {
         .sheet(isPresented: $showDisclaimer) {
             LegalNoticeSheet()
         }
+        .alert(text("发现新版本", "Update available"), isPresented: $showUpdateAlert) {
+            if case let .available(_, packageURL) = updateChecker.state {
+                Button(text("前往下载", "Download update")) {
+                    NSWorkspace.shared.open(packageURL)
+                }
+            }
+            Button(text("取消", "Cancel"), role: .cancel) {}
+        } message: {
+            if case let .available(version, _) = updateChecker.state {
+                Text(text(
+                    "当前版本 \(updateChecker.currentVersion)，GitHub 上的最新版本是 \(version)。",
+                    "Current version \(updateChecker.currentVersion); the latest GitHub release is \(version)."
+                ))
+            }
+        }
         .accessibilityIdentifier("settings-content")
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch updateChecker.state {
+        case .idle:
+            EmptyView()
+        case .checking:
+            Text(text("检查中…", "Checking…"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+        case .upToDate:
+            Text(text("没有新版本", "No update available"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+        case let .available(version, _):
+            Text(text("发现 \(version)", "Version \(version) available"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+        case .failed:
+            Text(text("检查失败", "Check failed"))
+                .routekeeperFont(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func checkForUpdates() {
+        Task { @MainActor in
+            await updateChecker.check()
+            if case .available = updateChecker.state {
+                showUpdateAlert = true
+            }
+        }
     }
 
     private var languageBinding: Binding<AppLanguage> {
