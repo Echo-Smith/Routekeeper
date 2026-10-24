@@ -46,11 +46,12 @@ promise anonymity, zero leakage or a way around any service restriction.
 
 > [!NOTE]
 > The current source version is **0.3.12 (build 24)**. The repository is
-> source-first. Local builds are ad-hoc signed by default; a public binary still
-> needs Developer ID signing, notarization and release-specific validation.
+> source-first. The first public DMG is ad-hoc signed and not notarized; it is a
+> development preview, not a production security distribution.
 
 ## Contents
 
+- [Download](#download)
 - [Why Routekeeper](#why-routekeeper)
 - [The workflow](#the-workflow)
 - [Feature overview](#feature-overview)
@@ -65,6 +66,18 @@ promise anonymity, zero leakage or a way around any service restriction.
 - [Current limitations](#current-limitations)
 - [Documentation](#documentation)
 - [License](#license)
+
+## Download
+
+[Routekeeper 0.3.12 (build 24)](https://github.com/Echo-Smith/Routekeeper/releases/tag/v0.3.12)
+is the first public source release with a DMG.
+
+- Requires macOS 14 or later; the current binary is Apple Silicon (`arm64`).
+- The DMG is ad-hoc signed and not notarized. If macOS blocks the first launch,
+  allow it in System Settings → Privacy & Security.
+- Verify the downloaded file against the SHA-256 asset in the same release.
+- Personal study, research, experiments and other noncommercial use are
+  permitted under the PolyForm Noncommercial License 1.0.0.
 
 ## Why Routekeeper
 

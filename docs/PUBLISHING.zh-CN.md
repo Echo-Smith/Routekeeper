@@ -75,7 +75,9 @@
 
 ## Release 建议
 
-首次发布建议只提供源码和经审核的 Release Notes。若同时提供 DMG：
+首个公开版本可以提供源码、经审核的 Release Notes，以及明确标注为开发预览的
+ad-hoc DMG。DMG 页面必须写明“未经 Developer ID 签名和 Apple 公证”，不得将
+它描述为生产级安全发行包。若要提供稳定版公共二进制：
 
 - 使用 Developer ID Application 证书签名；
 - 完成 Apple 公证和 `stapler` 附加；

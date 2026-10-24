@@ -43,10 +43,12 @@ Routekeeper 面向个人学习、研究和技术交流，重点在可观察、�
 
 > [!NOTE]
 > 当前源码版本为 **0.3.12（构建 24）**。仓库优先发布源码；本地构建默认使用
-> ad-hoc 签名，正式公共二进制仍需要 Developer ID 签名、公证和实机验收。
+> ad-hoc 签名。首个公开 DMG 同样未经 Developer ID 签名和 Apple 公证，属于
+> 开发预览，不是生产级安全发行包。
 
 ## 目录
 
+- [下载](#下载)
 - [为什么需要 Routekeeper](#为什么需要-routekeeper)
 - [核心流程](#核心流程)
 - [功能全景](#功能全景)
@@ -61,6 +63,18 @@ Routekeeper 面向个人学习、研究和技术交流，重点在可观察、�
 - [当前限制](#当前限制)
 - [文档](#文档)
 - [许可](#许可)
+
+## 下载
+
+[Routekeeper 0.3.12（构建 24）](https://github.com/Echo-Smith/Routekeeper/releases/tag/v0.3.12)
+是首个附带 DMG 的公开源码版本。
+
+- 需要 macOS 14 或更高版本；当前应用二进制为 Apple Silicon（arm64）。
+- DMG 使用 ad-hoc 签名且未经 Apple 公证。首次启动被 macOS 拦截时，可在
+  “系统设置 → 隐私与安全性”中确认打开。
+- 下载后请使用同一 Release 中的 SHA-256 文件核验完整性。
+- 依据 PolyForm Noncommercial License 1.0.0，允许个人学习、研究、实验和其他
+  非商业用途。
 
 ## 为什么需要 Routekeeper
 
