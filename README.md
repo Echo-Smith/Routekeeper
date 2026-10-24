@@ -64,6 +64,7 @@ promise anonymity, zero leakage or a way around any service restriction.
 - [Privacy and security](#privacy-and-security)
 - [Project layout](#project-layout)
 - [Current limitations](#current-limitations)
+- [Community and forks](#community-and-forks)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -404,6 +405,24 @@ combines Seatbelt profiles, process identity checks and a local relay.
 - Routekeeper does not modify proxy clients or subscriptions.
 - Results describe evidence from the current Mac and current network session;
   they are not a guarantee of zero leakage or permanent validity.
+
+## Community and forks
+
+Issues and pull requests are welcome. Bug reports, failed verification cases,
+accessibility improvements, documentation fixes and focused noncommercial
+changes are especially useful.
+
+Independent forks are also welcome under the current license. If you distribute
+a modified build:
+
+- retain `LICENSE` and the `Required Notice`;
+- identify your changes and use your own project and release name;
+- do not imply endorsement by Routekeeper;
+- stay within the noncommercial terms and the safety boundaries in
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Security-sensitive changes should include a threat-boundary description and
+tests for rejection and failure paths.
 
 ## Documentation
 

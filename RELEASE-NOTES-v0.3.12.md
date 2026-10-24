@@ -1,60 +1,83 @@
 # Routekeeper 0.3.12
 
-版本：0.3.12（构建号 24）
+Version: 0.3.12 (build 24)
 
-这是 Routekeeper 首个附带 macOS 安装镜像的公开源码版本。源码采用 PolyForm
-Noncommercial License 1.0.0，允许个人学习、研究、实验和其他非商业用途。
+This is the first public source release with a macOS installer image. The source
+is available under the PolyForm Noncommercial License 1.0.0 for personal study,
+research, experiments and other noncommercial purposes.
 
-## 新增
+## Added
 
-- 网络体检新增“代理网关检查”。
-- 支持“分流保护”和“仅限制 Claude”两种待验证方式。
-- 检查分四步完成：当前代理路径、停用海外节点、退出代理客户端、恢复代理并复测。
-- 首页、高级网络保护和实验性进程沙箱共用同一份网关状态。
-- 选择代理网关保护后，缺少当前网络会话的新鲜证据时，普通监控和桌面版启动会被阻止。
-- 网络路径、系统代理、DNS、地址、休眠唤醒、保护设置或应用重启会使旧证据失效。
-- 网关证据在 15 分钟后过期。
-- 实验性进程沙箱会自动对齐可识别的系统代理地址、端口和协议。
-- 沙箱预检新增 Claude 无代理断网、Claude 中继可达、实际出口与保存出口一致、
-  localhost 端口监听拦截和默认浏览器启动拦截。
-- 沙箱会统一本次会话的时区、语言和 locale，并明确不会伪装硬件销售地区。
-- 实验性沙箱新增四步安全启动向导，根据当前状态直接引导到网络体检、目录选择、
-  登录凭证或会话创建，不再要求用户自行判断配置顺序。
-- 启动前检查默认只展示未通过项目及对应处理建议；全部通过时显示汇总，完整
-  证据仍可展开查看。
-- 普通模式的首页新增四步“开始使用”向导，按状态引导用户打开代理、完成体检、
-  保存出口并开启监控。
-- 未开启沙箱时，首页会说明沙箱的用途、普通监控与沙箱二选一的关系，以及
-  实验接口、兼容性、账号判断和设备指纹方面的实际限制。
-- 设置新增“本地信息”，可停止当前任务并清除 Routekeeper 自有设置、报告、
-  运行记录、登录凭证、网关证据与沙箱副本；免责声明确认状态会保留。
-- 清空操作会明确列出保留范围，不会删除 Claude 项目、Claude 或代理客户端设置、
-  系统代理配置、应用本体、主动导出的文件，以及钥匙串中的其他项目。
+- Added staged proxy-gateway verification to network inspection.
+- Added split-traffic protection and protected-target-only verification modes.
+- Gateway verification now checks the current proxy path, failure after the
+  selected node is disconnected, failure after the proxy client exits, and
+  recovery after the proxy is restored.
+- Overview, advanced network protection and experimental process isolation now
+  share one gateway state.
+- Monitoring and desktop-application launch are blocked when gateway protection
+  is selected and fresh evidence for the current network session is unavailable.
+- Network path, system proxy, DNS, address, sleep/wake, protection-setting or app
+  restart changes invalidate earlier evidence.
+- Gateway evidence expires after 15 minutes.
+- Experimental process isolation aligns recognized system proxy address, port
+  and protocol settings automatically.
+- Isolation preflight now covers direct-network failure for the protected
+  target, local relay reachability, observed-exit consistency, localhost listener
+  blocking and default-browser launch blocking.
+- Sandbox sessions apply a consistent timezone, language and locale without
+  claiming to spoof the hardware sales region.
+- Added a four-step isolation setup guide that routes users to network
+  inspection, directory selection, credentials or session creation as needed.
+- Preflight results emphasize failed and actionable checks while keeping the
+  complete evidence expandable.
+- Added a four-step Overview onboarding flow for starting the proxy, completing
+  inspection, saving an exit and enabling monitoring.
+- The Overview explains how ordinary monitoring and experimental isolation
+  differ, including interface stability, compatibility and account-risk limits.
+- Local data cleanup can stop active work and remove Routekeeper-owned settings,
+  reports, activity, credentials, gateway evidence and sandbox copies.
+- Cleanup output clearly lists retained data, including user projects, proxy
+  client settings, system proxy configuration, exported files and unrelated
+  Keychain items.
 
-## 证据与边界
+## Evidence and boundaries
 
-- 每次检查会观察 ipinfo.io、Claude 跟踪地址、IPv4/IPv6、系统 DNS 与 UDP/STUN。
-- 必需项目全部通过才允许继续下一阶段；UDP/STUN 仅作参考，不单独决定严格结论。
-- 节点断开和代理退出由用户或外部 Agent 操作，Routekeeper 不读取订阅、节点名称或密钥，
-  也不会自动执行 Agent 生成的 shell 命令。
-- 应用只保存脱敏的结构化结果、阶段和时间，不保存出口 IP、代理凭据或原始配置。
-- 网关结论只覆盖当前 Mac 的网络会话。代理客户端按进程分流时，Routekeeper
-  不能证明每个 Claude 子进程都被正确识别；实验性沙箱仍执行自己的进程级预检。
+- Checks contact ipinfo.io, target-service trace endpoints, IPv4/IPv6 probes,
+  system DNS and UDP/STUN services.
+- Required checks must pass before verification can continue; UDP/STUN remains
+  supporting evidence and does not independently determine a strict result.
+- Node disconnection and proxy-client exit are performed by the user or an
+  external operator. Routekeeper does not read subscriptions, node names or
+  credentials, and it does not execute agent-generated shell commands.
+- Routekeeper stores redacted structured results, stages and timestamps, but not
+  exit IP addresses, proxy credentials or raw configuration.
+- Gateway conclusions cover only the current Mac and network session. When a
+  proxy client uses process-based routing, Routekeeper cannot prove that every
+  protected child process was routed correctly; experimental isolation performs
+  its own process-level preflight.
 
-## 验证
+## Verification
 
-- 226 项自动化测试通过，其中 3 项按运行环境跳过。
-- 覆盖阶段顺序、必需/参考项、15 分钟过期、网络变化、重启失效和监控启动门禁。
-- 覆盖系统代理匹配、IPv6 出口解析、localhost 监听拦截和新增沙箱检查项的展示。
-- 覆盖本地信息清理、Keychain 凭据删除、Routekeeper 自有沙箱副本识别，以及
-  免责声明确认状态的保留。
-- 覆盖启用沙箱后的一步退出确认与自动关闭，以及六个业务页面的顶部视觉锚点。
+- 226 automated tests passed, with 3 environment-gated tests skipped.
+- Coverage includes stage ordering, required and supporting checks, the
+  15-minute expiry, network invalidation, restart invalidation and monitoring
+  gates.
+- Coverage includes system-proxy matching, IPv6 exit parsing, localhost listener
+  blocking and the new isolation checks.
+- Coverage includes local-data cleanup, Keychain credential removal,
+  Routekeeper-owned sandbox-copy detection and terms-confirmation retention.
+- Coverage includes the one-step exit confirmation with automatic sandbox
+  shutdown and the initial visual anchor for all six product pages.
 
-## 分发方式
+## Distribution
 
-- 发布附件包含 `Routekeeper-v0.3.12.dmg` 及其 SHA-256 校验文件。
-- DMG 支持 macOS 14 或更高版本，当前应用二进制为 Apple Silicon（arm64）。
-- 本次 DMG 使用 ad-hoc 签名，未经 Developer ID 签名和 Apple 公证，属于公开
-  开发预览。首次启动若被 macOS 拦截，可在“系统设置 → 隐私与安全性”中确认打开。
-- 本项目不承诺匿名、零泄漏或规避任何服务限制；生产级分发仍需 Developer ID
-  签名、Apple 公证和发布前实机验收。
+- Release assets include `Routekeeper-v0.3.12.dmg` and its SHA-256 checksum.
+- The DMG requires macOS 14 or later. The current binary is built for Apple
+  Silicon (`arm64`).
+- This DMG is ad-hoc signed and has not been signed with a Developer ID or
+  notarized by Apple. It is a public development preview. If macOS blocks the
+  first launch, allow it in System Settings > Privacy & Security.
+- Routekeeper does not promise anonymity, zero leakage or circumvention of any
+  service restriction. Production distribution still requires Developer ID
+  signing, Apple notarization and release-specific validation.

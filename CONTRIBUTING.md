@@ -8,6 +8,28 @@ commercial or abusive capabilities.
 Routekeeper 是仅限非商业用途的源码公开项目。欢迎围绕安全、正确性、可访问性、
 文档和可维护性提交改进；不接受商业集成、规避服务控制或滥用能力。
 
+## Issues and pull requests
+
+Issues and pull requests are welcome. Use an issue for reproducible bugs,
+failed verification cases, security-boundary questions, accessibility problems
+and focused feature proposals. Pull requests should stay small, explain the
+behavior being changed and include tests where the behavior can be automated.
+
+欢迎提交 Issue 和 PR。可复现缺陷、失败验收、安全边界问题、辅助功能问题和聚焦的
+功能建议适合先提交 Issue；PR 应尽量小，说明行为变化，并在可行时补充测试。
+
+## Forks and derivative works
+
+Independent noncommercial forks are welcome. If you distribute a modified
+build, retain `LICENSE` and its `Required Notice`, identify your changes, use
+your own project and release name, and do not imply official endorsement.
+Commercial use, paid distribution and commercial integration still require
+separate authorization.
+
+欢迎独立 Fork 和非商业衍生版本。发布修改版时请保留 `LICENSE` 及
+`Required Notice`、注明修改内容、使用自己的项目名和发布名，并且不得暗示官方
+背书。商业使用、付费分发和商业集成仍需单独授权。
+
 ## Before contributing
 
 - Read `LICENSE`, `TERMS.md` and `PRIVACY.md`.
