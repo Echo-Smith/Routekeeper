@@ -4,10 +4,7 @@ import SwiftUI
 struct NetworkSettingsPage: View {
     @Bindable var store: GuardStore
 
-    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
-    @AppStorage("routekeeper-egress-intelligence-v1") private var includeIntelligence = false
-    @State private var confirmClearHistory = false
-    @State private var confirmClearReports = false
+    @State private var showModeConfiguration = false
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -23,262 +20,165 @@ struct NetworkSettingsPage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .appSurface(.inset, corner: 10)
             }
-            settingsWorkspace
+
+            protectionScopeSection
+                .appSurface(.primary)
+            protectionModeSection
+                .appSurface(.primary)
+                .id(NetworkProtectionAnchor.protectionMode)
+            exitsAndMonitoringSection
+                .appSurface(.primary)
         }
-        .confirmationDialog(
-            text("清除本机出口历史？", "Clear local exit history?"),
-            isPresented: $confirmClearHistory
-        ) {
-            Button(text("清除历史", "Clear history"), role: .destructive) {
-                store.egressAudit.clearHistory()
-            }
-        } message: {
-            Text(text(
-                "只删除本机出口 IP 历史。",
-                "Only local exit-IP history is removed."
-            ))
-        }
-        .confirmationDialog(
-            text("清除最近两次体检报告？", "Clear the two most recent egress reports?"),
-            isPresented: $confirmClearReports
-        ) {
-            Button(text("清除报告", "Clear reports"), role: .destructive) {
-                store.egressAudit.clearStoredResults()
-            }
-        } message: {
-            Text(text(
-                "只删除本机保存的完整体检报告。",
-                "Only locally stored egress reports are removed."
-            ))
+        .sheet(isPresented: $showModeConfiguration) {
+            ProxyModeConfigurationSheet(store: store)
         }
     }
 
-    private var settingsWorkspace: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            scopeAndModeSection
-            AppHairline().padding(.horizontal, 20)
-            exitsAndProbesSection
-            AppHairline().padding(.horizontal, 20)
-            responseAndPrivacySection
-        }
-        .appSurface(.primary)
-    }
-
-    private var scopeAndModeSection: some View {
+    private var protectionScopeSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             AppSectionHeading(
-                title: text("保护范围与方式", "Protection scope and mode"),
-                subtitle: text("保护对象与失败关闭方式。",
-                               "Protected apps and fail-closed behavior.")
+                title: text("保护范围", "Protection scope")
             )
-            VStack(alignment: .leading, spacing: 16) {
-                settingsSectionTitle(text("保护对象", "Protected apps"))
-                protectToggle(
-                    isOn: $store.settings.protectDesktop,
-                    icon: "macwindow",
-                    label: L("protect.desktop"),
-                    available: store.desktopInstalled,
-                    unavailableHint: L("protect.desktop.unavailable")
-                )
-                protectToggle(
-                    isOn: $store.settings.protectCode,
-                    icon: "terminal",
-                    label: L("protect.code"),
-                    available: store.codeInstalled,
-                    unavailableHint: L("protect.code.unavailable")
-                )
 
-                AppHairline()
-
-                settingsSectionTitle(text("保护方式", "Protection mode"))
-                Picker("", selection: $store.settings.gatewayProtectionMode) {
-                    ForEach(GatewayProtectionMode.allCases, id: \.self) { mode in
-                        Text(modeTitle(mode)).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 460)
-                .accessibilityLabel(text("保护方式", "Protection mode"))
-                .accessibilityIdentifier("network-settings-protection-mode")
-
-                Text(modeExplanation)
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 12) {
-                    Label(text("系统过滤", "System filter"), systemImage: "line.3.horizontal.decrease.circle")
-                        .routekeeperFont(.callout)
-                    Spacer()
-                    Text(store.networkFilter.canInstall
-                         ? text("当前构建可用", "Available in this build")
-                         : text("当前签名不可用", "Unavailable with this signature"))
-                        .routekeeperFont(.caption, weight: .medium)
-                        .foregroundStyle(store.networkFilter.canInstall ? appAccent : Color.orange)
-                }
-                if !store.networkFilter.canInstall {
-                    Text(text(
-                        "当前为临时签名构建，无法启用系统扩展。分流与 Claude-only 仍需在代理客户端配置。",
-                        "This temporary-signature build cannot install the system extension. Split routing and Claude-only rules still require proxy-client configuration."
-                    ))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .disabled(settingsLocked)
+            protectToggle(
+                isOn: $store.settings.protectDesktop,
+                icon: "macwindow",
+                label: L("protect.desktop"),
+                available: store.desktopInstalled,
+                unavailableHint: L("protect.desktop.unavailable")
+            )
+            protectToggle(
+                isOn: $store.settings.protectCode,
+                icon: "terminal",
+                label: L("protect.code"),
+                available: store.codeInstalled,
+                unavailableHint: L("protect.code.unavailable")
+            )
         }
         .padding(20)
+        .disabled(settingsLocked)
     }
 
-    private var exitsAndProbesSection: some View {
+    private var protectionModeSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             AppSectionHeading(
-                title: text("出口与检查参数", "Exits and check parameters"),
-                subtitle: text("目标出口、代理客户端与探测。",
-                               "Target exits, proxy client and probes.")
+                title: text("保护方式", "Protection mode"),
+                subtitle: text("决定节点断开或代理退出时，Claude 是否能够继续联网。",
+                               "Choose whether Claude can stay online when the node fails or the proxy exits.")
             )
-            VStack(alignment: .leading, spacing: 16) {
-                settingsSectionTitle(text("固定出口", "Fixed exits"))
-                fixedExitRow(
-                    family: .ipv4,
-                    label: text("IPv4 固定出口", "IPv4 fixed exit"),
-                    placeholder: text("IPv4 出口地址", "IPv4 exit address")
-                )
-                fixedExitRow(
-                    family: .ipv6,
-                    label: text("IPv6 固定出口", "IPv6 fixed exit"),
-                    placeholder: text("IPv6 出口地址", "IPv6 exit address")
-                )
-                AppHairline()
 
-                settingsSectionTitle(text("探测参数", "Probe settings"))
-                LabeledContent {
-                    Menu {
-                        ForEach(ProxyClient.allCases, id: \.self) { client in
-                            Button(client.title) {
-                                store.settings.proxyClient = client
-                            }
-                        }
-                    } label: {
-                        Text(store.settings.proxyClient.title)
-                    }
-                    .accessibilityLabel(text("代理客户端", "Proxy client"))
-                    .accessibilityValue(store.settings.proxyClient.title)
-                    .accessibilityIdentifier("network-settings-proxy-client")
-                } label: {
-                    Text(text("代理客户端", "Proxy client"))
-                }
-                .accessibilityElement(children: .contain)
-
-                LabeledContent {
-                    HStack(spacing: 8) {
-                        TextField("1–300", value: $store.settings.pollInterval, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 90 * textScale)
-                            .accessibilityLabel(text("检查间隔（秒）", "Check interval in seconds"))
-                            .accessibilityIdentifier("network-settings-poll-interval")
-                        Text(text("秒", "seconds"))
+            Picker("", selection: $store.settings.gatewayProtectionMode) {
+                ForEach(GatewayProtectionMode.allCases, id: \.self) { mode in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(mode.displayTitle)
+                            .routekeeperFont(.body, weight: .medium)
+                        Text(mode.displayExplanation)
+                            .routekeeperFont(.caption)
                             .foregroundStyle(.secondary)
-                        Stepper("", value: $store.settings.pollInterval, in: 1...300, step: 1)
-                            .labelsHidden()
-                            .accessibilityLabel(text("检查间隔", "Check interval"))
                     }
-                } label: {
-                    Text(text("检查间隔", "Check interval"))
+                    .tag(mode)
                 }
-                .accessibilityElement(children: .contain)
-                if !store.settings.validInterval {
-                    Text(text("请输入 1–300 秒。", "Enter a value from 1 to 300."))
+            }
+            .labelsHidden()
+            .pickerStyle(.radioGroup)
+            .accessibilityLabel(text("保护方式", "Protection mode"))
+            .accessibilityIdentifier("network-settings-protection-mode")
+            .disabled(settingsLocked)
+
+            if !store.networkFilter.canInstall {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(text("系统过滤当前不可用", "System filtering is unavailable"))
+                            .routekeeperFont(.callout, weight: .medium)
+                        Text(text(
+                            "当前为临时签名构建。分流与“仅限制 Claude”规则需要在代理客户端中配置。",
+                            "This temporary-signature build requires split-routing and Claude-only rules to be configured in the proxy client."
+                        ))
                         .routekeeperFont(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
-                Toggle(
-                    text("检测 DNS 解析器路由与响应", "Probe DNS resolver routes and responses"),
-                    isOn: $store.settings.dnsProbeEnabled
-                )
-                .toggleStyle(.switch)
-                Toggle(
-                    text("用两处 STUN 服务检测 UDP 出口", "Probe UDP egress with two STUN servers"),
-                    isOn: $store.settings.udpProbeEnabled
-                )
-                .toggleStyle(.switch)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .appSurface(.inset, corner: 10)
             }
-            .disabled(settingsLocked)
+
+            if store.settings.gatewayProtectionMode != .off {
+                AppHairline()
+
+                HStack(alignment: .center, spacing: 14) {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(text("代理客户端规则", "Proxy-client rules"))
+                                .routekeeperFont(.callout, weight: .medium)
+                            Text(text("Routekeeper 不会自动修改代理客户端。",
+                                      "Routekeeper does not modify the proxy client automatically."))
+                                .routekeeperFont(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "slider.horizontal.3")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Button {
+                        showModeConfiguration = true
+                    } label: {
+                        Label(text("配置此模式…", "Configure this mode…"),
+                              systemImage: "doc.on.doc")
+                    }
+                    .routekeeperSecondaryButton()
+                    .accessibilityIdentifier("configure-protection-mode")
+                }
+            }
         }
         .padding(20)
     }
 
-    private var responseAndPrivacySection: some View {
+    private var exitsAndMonitoringSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             AppSectionHeading(
-                title: text("异常与本地数据", "Incidents and local data"),
-                subtitle: text("异常处理、第三方查询与本机记录。",
-                               "Incident handling, third-party lookup and local evidence.")
+                title: text("出口与异常处理", "Exits and incident handling")
             )
-            VStack(alignment: .leading, spacing: 16) {
-                settingsSectionTitle(text("异常处理", "On incident"))
-                Picker(text("检测到异常时", "On incident"), selection: $store.settings.action) {
-                    ForEach(IncidentAction.allCases, id: \.self) { action in
-                        Text(action == .notify ? L("action.notify") : L("action.terminate")).tag(action)
-                    }
+
+            settingsSectionTitle(text("固定出口", "Fixed exits"))
+            fixedExitRow(
+                family: .ipv4,
+                label: text("IPv4 固定出口", "IPv4 fixed exit"),
+                placeholder: text("IPv4 出口地址", "IPv4 exit address")
+            )
+            fixedExitRow(
+                family: .ipv6,
+                label: text("IPv6 固定出口", "IPv6 fixed exit"),
+                placeholder: text("IPv6 出口地址", "IPv6 exit address")
+            )
+
+            AppHairline()
+
+            settingsSectionTitle(text("异常动作", "Incident action"))
+            Picker(text("检测到异常时", "On incident"), selection: $store.settings.action) {
+                ForEach(IncidentAction.allCases, id: \.self) { action in
+                    Text(action == .notify ? L("action.notify") : L("action.terminate"))
+                        .tag(action)
                 }
-                .pickerStyle(.menu)
-                .disabled(settingsLocked)
-                Text(store.settings.action == .terminate ? L("action.terminate.hint") : L("action.notify.hint"))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .pickerStyle(.menu)
 
-                AppHairline()
-
-                settingsSectionTitle(text("第三方查询", "Third-party lookup"))
-                Toggle(
-                    text("查询第三方 IP 信息", "Query third-party IP intelligence"),
-                    isOn: $includeIntelligence
-                )
-                .toggleStyle(.switch)
-                .accessibilityIdentifier("network-settings-third-party-intelligence")
-                Text(text(
-                    "手动体检会把出口 IP 发送给 ipwho.is / ipapi.is。",
-                    "Manual checks send the exit IP to ipwho.is / ipapi.is."
-                ))
+            Text(store.settings.action == .terminate
+                 ? L("action.terminate.hint")
+                 : L("action.notify.hint"))
                 .routekeeperFont(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-
-                AppHairline()
-
-                settingsSectionTitle(text("本机证据", "Local evidence"))
-                HStack(spacing: 10) {
-                    Button(role: .destructive) {
-                        confirmClearReports = true
-                    } label: {
-                        Label(text("清除已保存报告", "Clear stored reports"), systemImage: "doc.badge.minus")
-                    }
-                    .routekeeperSecondaryButton()
-                    .disabled(store.egressAudit.report == nil && store.egressAudit.previousReport == nil)
-
-                    Button(role: .destructive) {
-                        confirmClearHistory = true
-                    } label: {
-                        Label(text("清除出口历史", "Clear exit history"), systemImage: "clock.arrow.circlepath")
-                    }
-                    .routekeeperSecondaryButton()
-                    .disabled(store.egressAudit.history.isEmpty)
-
-                    Spacer(minLength: 0)
-                }
-                Text(text(
-                    "最近两次报告和最多 20 条出口历史仅保存在本机。",
-                    "The two latest reports and up to 20 exits stay on this Mac."
-                ))
-                .routekeeperFont(.caption2)
-                .foregroundStyle(.tertiary)
-            }
         }
         .padding(20)
+        .disabled(settingsLocked)
     }
 
     private var settingsLocked: Bool {
@@ -286,23 +186,20 @@ struct NetworkSettingsPage: View {
             || store.checking
             || store.networkFilter.configured
             || store.networkFilter.busy
-            || store.settings.experimentalSandboxEnabled
+            || store.sandbox.anyActive
+            || store.sandbox.busy
     }
 
     private var lockHint: String? {
-        if store.settings.experimentalSandboxEnabled {
-            return store.sandbox.phase.isActive
-                ? text(
-                    "沙箱运行中，无法进行设置。请先结束并关闭沙箱。",
-                    "Sandbox is active. End and close it before changing settings."
-                )
-                : text(
-                    "沙箱已启用，网络保护设置暂不可更改。请先在沙箱页关闭沙箱。",
-                    "Sandbox mode is on. Close it on the Sandbox page before changing network protection."
-                )
+        if store.sandbox.anyActive || store.sandbox.busy {
+            return text(
+                "沙箱会话运行或准备期间，网络保护设置暂时只读。结束会话后即可修改。",
+                "Network protection settings are read-only while a sandbox session is active or preparing. End the session to make changes."
+            )
         }
         if store.networkFilter.configured || store.networkFilter.busy {
-            return text("系统网络过滤正在使用，设置暂时只读。", "System network filtering is active, so settings are read-only.")
+            return text("系统网络过滤正在使用，设置暂时只读。",
+                        "System network filtering is active, so settings are read-only.")
         }
         if store.monitoring {
             return text("监控运行期间设置只读。", "Settings are read-only while monitoring.")
@@ -320,41 +217,43 @@ struct NetworkSettingsPage: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private var textScale: CGFloat {
-        (AppTextScale(rawValue: textScaleRaw) ?? .standard).multiplier
-    }
-
     @ViewBuilder
     private func fixedExitRow(family: IPFamily, label: String, placeholder: String) -> some View {
         let availabilityKnown = store.activeFamilies != nil
         let available = family == .ipv4 || !availabilityKnown || store.activeFamilies?.contains(family) == true
-        LabeledContent {
-            HStack(spacing: 10) {
-                TextField(placeholder, text: Binding(
-                    get: { store.settings.fixedExit(for: family) },
-                    set: { store.settings.setFixedExit($0, for: family) }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .routekeeperFont(.body, design: .monospaced)
-                .accessibilityLabel(label)
-                .accessibilityIdentifier("network-settings-fixed-exit-\(family.rawValue)")
-                Button {
-                    Task { await store.adoptObservedExit(family: family) }
-                } label: {
-                    Label(L("action.autoExit"), systemImage: "wand.and.stars")
+
+        if available {
+            LabeledContent {
+                HStack(spacing: 10) {
+                    TextField(placeholder, text: Binding(
+                        get: { store.settings.fixedExit(for: family) },
+                        set: { store.settings.setFixedExit($0, for: family) }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .routekeeperFont(.body, design: .monospaced)
+                    .accessibilityLabel(label)
+                    .accessibilityIdentifier("network-settings-fixed-exit-\(family.rawValue)")
+
+                    Button {
+                        Task { await store.adoptObservedExit(family: family) }
+                    } label: {
+                        Label(L("action.autoExit"), systemImage: "wand.and.stars")
+                    }
+                    .disabled(store.monitoring || store.checking)
                 }
-                .disabled(!available || store.monitoring || store.checking)
-                if !available {
-                    Text(text("未启用，已关闭", "Disabled on this Mac"))
-                        .routekeeperFont(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            } label: {
+                Label(label, systemImage: family == .ipv4 ? "4.circle" : "6.circle")
             }
-        } label: {
-            Label(label, systemImage: family == .ipv4 ? "4.circle" : "6.circle")
+            .accessibilityElement(children: .contain)
+        } else {
+            LabeledContent {
+                Text(text("当前网络未启用", "Not active on this network"))
+                    .routekeeperFont(.callout)
+                    .foregroundStyle(.secondary)
+            } label: {
+                Label(label, systemImage: family == .ipv4 ? "4.circle" : "6.circle")
+            }
         }
-        .accessibilityElement(children: .contain)
-        .disabled(!available || store.monitoring || store.checking)
     }
 
     @ViewBuilder
@@ -383,33 +282,35 @@ struct NetworkSettingsPage: View {
             .disabled(!available)
         }
     }
+}
 
-    private func modeTitle(_ mode: GatewayProtectionMode) -> String {
-        switch mode {
-        case .off: return text("关闭", "Off")
-        case .splitTraffic: return text("分流保护", "Split routing")
-        case .claudeOnly: return text("仅限制 Claude", "Claude only")
-        }
-    }
-
-    private var modeExplanation: String {
-        switch store.settings.gatewayProtectionMode {
+extension GatewayProtectionMode {
+    var displayTitle: String {
+        switch self {
         case .off:
-            return text(
-                "只做网络体检，不验证代理失败关闭。",
-                "Checks the network without fail-closed verification."
-            )
+            return L10n.resolvedEnglish ? "Off" : "关闭"
         case .splitTraffic:
-            return text(
-                "国内直连，其余流量走海外节点；节点断开时断网。",
-                "Direct for domestic traffic, overseas node for the rest, fail closed on node loss."
-            )
+            return L10n.resolvedEnglish ? "Split routing" : "分流保护"
         case .claudeOnly:
-            return text(
-                "只限制 Claude Desktop 与 Claude Code；需要客户端支持进程分流。",
-                "Restrict Claude Desktop and Claude Code only; the proxy client must support process rules."
-            )
+            return L10n.resolvedEnglish ? "Claude only" : "仅限制 Claude"
         }
     }
 
+    var displayExplanation: String {
+        let en = L10n.resolvedEnglish
+        switch self {
+        case .off:
+            return en
+                ? "Run network checks without verifying fail-closed behavior."
+                : "只做网络体检，不验证代理失败关闭。"
+        case .splitTraffic:
+            return en
+                ? "Domestic traffic connects directly; other traffic uses the overseas node and fails closed when the node is lost."
+                : "国内直连，其余流量走海外节点；节点断开时断网。"
+        case .claudeOnly:
+            return en
+                ? "Restrict Claude Desktop and Claude Code only; the proxy client must support process rules."
+                : "只限制 Claude Desktop 与 Claude Code；需要客户端支持进程分流。"
+        }
+    }
 }

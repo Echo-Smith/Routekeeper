@@ -5,7 +5,9 @@ struct GatewayVerificationPage: View {
     @Bindable var controller: GatewayVerificationController
     let mode: GatewayProtectionMode
     let onChangeMode: () -> Void
-    @State private var showMethodAndSteps = false
+    var embedded = false
+    var showsHeader = true
+    var showsAction = true
 
     private func text(_ zh: String, _ en: String) -> String {
         L10n.resolvedEnglish ? en : zh
@@ -17,60 +19,42 @@ struct GatewayVerificationPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: statusSymbol)
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(statusColor)
-                    .frame(width: 46, height: 46)
-                    .background(
-                        statusColor.opacity(0.09),
-                        in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    )
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(statusTitle)
-                        .routekeeperFont(.title3, weight: .semibold)
-                        .tracking(-0.2)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(statusSubtitle)
-                        .routekeeperFont(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 12)
-                if controller.busy {
-                    ProgressView().controlSize(.small)
+            if showsHeader {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: statusSymbol)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(statusColor)
+                        .frame(width: 46, height: 46)
+                        .background(
+                            statusColor.opacity(0.09),
+                            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        )
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(statusTitle)
+                            .routekeeperFont(.title3, weight: .semibold)
+                            .tracking(-0.2)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(statusSubtitle)
+                            .routekeeperFont(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    if controller.busy {
+                        ProgressView().controlSize(.small)
+                    }
                 }
             }
 
             if mode != .off {
-                DisclosureGroup(isExpanded: $showMethodAndSteps) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        modeRow
-                        gatewaySteps
-                    }
-                    .padding(.top, 8)
-                } label: {
-                    Label(
-                        text("检查方法与步骤", "Method and steps"),
-                        systemImage: "list.number"
-                    )
-                    .routekeeperFont(.callout, weight: .medium)
-                }
+                modeRow
 
-                if !controller.message.isEmpty {
-                    Label(controller.message, systemImage: messageSymbol)
-                        .routekeeperFont(.callout)
-                        .foregroundStyle(messageColor)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            messageColor.opacity(0.07),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        )
+                if showsAction {
+                    actionRow
+                } else {
+                    actionInstruction
                 }
-                actionRow
             }
 
             if let record = controller.record,
@@ -82,70 +66,55 @@ struct GatewayVerificationPage: View {
                 }
                 .routekeeperFont(.callout, weight: .medium)
             }
+
+            if mode != .off, !controller.message.isEmpty {
+                messageFootnote
+            }
         }
-        .padding(20)
-        .appSurface(.secondary)
+        .padding(embedded ? 16 : 20)
+        .appSurface(embedded ? .inset : .secondary)
         .accessibilityIdentifier("gateway-verification-card")
     }
 
     private var modeRow: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Image(systemName: mode == .claudeOnly ? "scope" : "arrow.triangle.branch")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 22)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(text("当前保护方式", "Selected protection"))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                Text(modeTitle)
-                    .routekeeperFont(.callout, weight: .semibold)
+            Text(text("当前保护方式", "Selected protection"))
+                .routekeeperFont(.callout)
+                .foregroundStyle(.secondary)
+            Text(modeTitle)
+                .routekeeperFont(.callout, weight: .semibold)
+            Spacer(minLength: 12)
+            Button(action: onChangeMode) {
+                Label(
+                    text("配置保护方式", "Configure protection"),
+                    systemImage: "arrow.up.right"
+                )
+                .labelStyle(.titleAndIcon)
             }
-            Spacer()
-            Button(text("更改方式", "Change mode"), action: onChangeMode)
                 .buttonStyle(.borderless)
                 .routekeeperFont(.callout, weight: .medium)
                 .foregroundStyle(appAccent)
                 .accessibilityIdentifier("gateway-change-mode")
         }
-        .padding(12)
-        .background(
-            Color.primary.opacity(0.035),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-    }
-
-    private var gatewaySteps: some View {
-        HStack(alignment: .top, spacing: 8) {
-            gatewayStep(1, text("检查当前路径", "Check current path"), complete: stepComplete(1))
-            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
-            gatewayStep(2, text("停用节点后复测", "Retest with node off"), complete: stepComplete(2))
-            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
-            gatewayStep(3, text("退出代理后复测", "Retest with client off"), complete: stepComplete(3))
-            Image(systemName: "chevron.right").routekeeperFont(.caption2).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
-            gatewayStep(4, text("恢复并完成", "Restore and finish"), complete: status == .verified)
-        }
-    }
-
-    private func gatewayStep(_ number: Int, _ title: String, complete: Bool) -> some View {
-        HStack(spacing: 7) {
-            Text(complete ? "✓" : "\(number)")
-                .routekeeperFont(.caption, weight: .bold)
-                .foregroundStyle(complete ? Color.white : Color.secondary)
-                .frame(width: 20, height: 20)
-                .background(
-                    complete ? appAccent : Color.primary.opacity(0.07),
-                    in: Circle()
-                )
-            Text(title)
-                .routekeeperFont(.caption)
-                .foregroundStyle(complete ? .primary : .secondary)
-                .lineLimit(2)
-        }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var messageFootnote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: messageSymbol)
+                .font(.system(size: 11, weight: .medium))
+                .accessibilityHidden(true)
+            Text(controller.message)
+                .routekeeperFont(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(messageColor)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -169,7 +138,7 @@ struct GatewayVerificationPage: View {
             VStack(alignment: .leading, spacing: 10) {
                 instruction(
                     text(
-                        "现在只停用所选海外节点，并保持代理客户端运行。若当前配置会把该流量切到其他节点，请先让 Agent 去掉回退节点。",
+                        "现在只停用所选海外节点，并保持代理客户端运行。若当前配置会把该流量切到其他节点，请先让智能体去掉回退节点。",
                         "Disable only the selected overseas node and keep the proxy client running. If the configuration falls back to another node, remove that fallback first."
                     )
                 )
@@ -231,6 +200,56 @@ struct GatewayVerificationPage: View {
         }
     }
 
+    @ViewBuilder
+    private var actionInstruction: some View {
+        switch status {
+        case .unverified:
+            instruction(
+                text(
+                    "先确认当前保护方式和代理客户端状态，再从当前路径开始检查。",
+                    "Confirm the selected protection and proxy client state, then start with the current path."
+                )
+            )
+        case .failed:
+            instruction(
+                text(
+                    "检查所选节点、TUN 模式和系统代理，确认代理入口与 Claude 路径使用同一出口后从头重测。",
+                    "Check the selected node, TUN mode and system proxy. Confirm the proxy entry and Claude path use the same exit, then rerun from the start."
+                )
+            )
+        case .expired:
+            instruction(
+                text(
+                    "网络或设置已经变化，请重新检查当前代理路径，旧证据不能继续使用。",
+                    "The network or settings changed. Check the current gateway path again; the old evidence can no longer be used."
+                )
+            )
+        case .needsNodeFailureTest:
+            instruction(
+                text(
+                    "现在只停用所选海外节点，并保持代理客户端运行。若当前配置会把该流量切到其他节点，请先让智能体去掉回退节点。",
+                    "Disable only the selected overseas node and keep the proxy client running. If the configuration falls back to another node, remove that fallback first."
+                )
+            )
+        case .needsClientExitTest:
+            instruction(
+                text(
+                    "先恢复节点，再完全退出代理客户端。Routekeeper 会检查 Claude 目标是否仍能连接；能连接就说明存在回落直连风险。",
+                    "Restore the node, then quit the proxy client completely. Routekeeper will check whether the Claude target is still reachable; if it is, direct fallback is possible."
+                )
+            )
+        case .needsRecovery:
+            instruction(
+                text(
+                    "重新启动代理客户端并恢复原来的节点。确认正常联网后，再完成最后一次复测。",
+                    "Restart the proxy client and restore the original node. Confirm normal connectivity, then run the final check."
+                )
+            )
+        case .verified:
+            EmptyView()
+        }
+    }
+
     private func instruction(_ value: String) -> some View {
         Label(value, systemImage: "person.crop.circle.badge.exclamationmark")
             .routekeeperFont(.callout)
@@ -277,43 +296,61 @@ struct GatewayVerificationPage: View {
         }
     }
 
-    private var statusTitle: String {
+    var statusTitle: String {
+        Self.title(for: status)
+    }
+
+    static func title(for status: GatewayVerificationStatus) -> String {
+        let en = L10n.resolvedEnglish
         switch status {
-        case .unverified: return text("代理网关尚未检查", "Gateway not checked")
-        case .needsNodeFailureTest: return text("已通过当前路径，待测节点断开", "Current path passed; test node failure")
-        case .needsClientExitTest: return text("已通过节点断开测试，待测代理退出", "Node-failure test passed; test client exit")
-        case .needsRecovery: return text("失败关闭测试通过，待恢复代理", "Fail-closed tests passed; restore proxy")
-        case .verified: return text("当前代理网关已验证", "Current gateway verified")
-        case .failed: return text("代理网关检查未通过", "Gateway check failed")
-        case .expired: return text("代理网关证据已过期", "Gateway evidence expired")
+        case .unverified: return en ? "Gateway not checked" : "代理网关尚未检查"
+        case .needsNodeFailureTest: return en ? "Current path passed; test node failure" : "已通过当前路径，待测节点断开"
+        case .needsClientExitTest: return en ? "Node-failure test passed; test client exit" : "已通过节点断开测试，待测代理退出"
+        case .needsRecovery: return en ? "Fail-closed tests passed; restore proxy" : "失败关闭测试通过，待恢复代理"
+        case .verified: return en ? "Current gateway verified" : "当前代理网关已验证"
+        case .failed: return en ? "Gateway check failed" : "代理网关检查未通过"
+        case .expired: return en ? "Gateway evidence expired" : "代理网关证据已过期"
         }
     }
 
-    private var statusSubtitle: String {
+    var statusSubtitle: String {
+        Self.subtitle(for: status, mode: mode)
+    }
+
+    static func subtitle(
+        for status: GatewayVerificationStatus,
+        mode: GatewayProtectionMode
+    ) -> String {
+        let en = L10n.resolvedEnglish
         switch status {
         case .unverified:
             return mode == .off
-                ? text("先在检查设置中选择分流保护或仅限制 Claude。", "Choose split routing or Claude-only restriction in Check settings first.")
-                : text("依次检查当前路径、节点断开和代理退出，不能只凭一次成功请求下结论。",
-                       "Check the current path, node failure and client exit in order. One successful request is not enough.")
+                ? (en ? "Choose split routing or Claude-only restriction in Check options first." : "先在检查选项中选择分流保护或仅限制 Claude。")
+                : (en ? "Check the current path, node failure and client exit in order. One successful request is not enough." : "依次检查当前路径、节点断开和代理退出，不能只凭一次成功请求下结论。")
         case .needsNodeFailureTest:
-            return text("当前代理能用。下一步验证海外节点断开时 Claude 不会退回直连。",
-                        "The proxy currently works. Next, verify Claude does not fall back to a direct connection when the overseas node is unavailable.")
+            return en
+                ? "The proxy currently works. Next, verify Claude does not fall back to a direct connection when the overseas node is unavailable."
+                : "当前代理能用。下一步验证海外节点断开时 Claude 不会退回直连。"
         case .needsClientExitTest:
-            return text("节点断开时 Claude 已失败关闭。下一步验证代理客户端退出后 TUN 不会放出直连。",
-                        "Claude failed closed with the node unavailable. Next, verify the TUN path does not reopen direct access when the client exits.")
+            return en
+                ? "Claude failed closed with the node unavailable. Next, verify the TUN path does not reopen direct access when the client exits."
+                : "节点断开时 Claude 已失败关闭。下一步验证代理客户端退出后 TUN 不会放出直连。"
         case .needsRecovery:
-            return text("两项失败关闭测试均已通过。恢复代理并做最终复测后才会显示已验证。",
-                        "Both fail-closed tests passed. Restore the proxy and run the final check before marking verification complete.")
+            return en
+                ? "Both fail-closed tests passed. Restore the proxy and run the final check before marking verification complete."
+                : "两项失败关闭测试均已通过。恢复代理并做最终复测后才会显示已验证。"
         case .verified:
-            return text("当前网络会话内已取得完整证据。网络、代理或系统设置一旦变化会立即作废。",
-                        "Complete evidence was collected in this network session. Any network, proxy or system-settings change invalidates it.")
+            return en
+                ? "Complete evidence was collected in this network session. Any network, proxy or system-settings change invalidates it."
+                : "当前网络会话内已取得完整证据。网络、代理或系统设置一旦变化会立即作废。"
         case .failed:
-            return text("有必需项目未通过。查看下方证据，修复后从头重测。",
-                        "At least one required item failed. Review the evidence, fix it and rerun from the start.")
+            return en
+                ? "At least one required item failed. Review the evidence, fix it and rerun from the start."
+                : "有必需项目未通过。查看下方证据，修复后从头重测。"
         case .expired:
-            return text("网络状态或设置已经变化，旧结论不能再用于保护判断。",
-                        "Network state or settings changed, so the old result cannot support a protection decision.")
+            return en
+                ? "Network state or settings changed, so the old result cannot support a protection decision."
+                : "网络状态或设置已经变化，旧结论不能再用于保护判断。"
         }
     }
 
@@ -328,9 +365,9 @@ struct GatewayVerificationPage: View {
 
     private var statusColor: Color {
         switch status {
-        case .verified: return appAccent
-        case .failed, .expired: return .orange
-        case .needsNodeFailureTest, .needsClientExitTest, .needsRecovery: return .secondary
+        case .verified: return appStatusSuccess
+        case .failed, .expired: return appStatusFailure
+        case .needsNodeFailureTest, .needsClientExitTest, .needsRecovery: return appStatusWarning
         case .unverified: return .secondary
         }
     }
@@ -344,18 +381,7 @@ struct GatewayVerificationPage: View {
     }
 
     private var messageColor: Color {
-        messageSymbol == "exclamationmark.circle.fill" ? .orange : statusColor
-    }
-
-    private func stepComplete(_ number: Int) -> Bool {
-        guard let record = controller.record, record.mode == mode else { return false }
-        switch number {
-        case 1: return record.baselinePassed
-        case 2: return record.nodeFailureCheck?.level == .passed
-        case 3: return record.clientExitCheck?.level == .passed
-        case 4: return status == .verified
-        default: return false
-        }
+        messageSymbol == "exclamationmark.circle.fill" ? appStatusFailure : statusColor
     }
 
     private func checkSymbol(_ level: CheckLevel) -> String {
@@ -368,9 +394,9 @@ struct GatewayVerificationPage: View {
 
     private func checkColor(_ level: CheckLevel) -> Color {
         switch level {
-        case .passed: return appAccent
-        case .failed: return .orange
-        case .warning, .unknown: return .secondary
+        case .passed: return appStatusSuccess
+        case .failed: return appStatusFailure
+        case .warning, .unknown: return appStatusWarning
         }
     }
 }

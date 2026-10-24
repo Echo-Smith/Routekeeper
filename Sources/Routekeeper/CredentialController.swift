@@ -39,8 +39,8 @@ final class CredentialController {
             savedAt = nil
             message = "尚未保存 Claude Code 登录凭证"
         default:
-            status = .error("无法读取 Keychain（\(result)）")
-            message = "无法读取 Keychain，请在系统钥匙串中检查 Routekeeper。"
+            status = .error("无法读取钥匙串（\(result)）")
+            message = "无法读取 macOS 钥匙串，请在“钥匙串访问”中检查 Routekeeper。"
         }
     }
 
@@ -48,8 +48,8 @@ final class CredentialController {
         let token = tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !busy else { return }
         guard token.count >= 20, !token.contains(where: \.isNewline) else {
-            status = .error("token 格式无效")
-            message = "请粘贴完整的 Claude Code token；token 不会写入日志或导出报告。"
+            status = .error("登录凭证格式无效")
+            message = "请粘贴完整的 Claude Code 登录凭证；凭证不会写入日志或导出报告。"
             return
         }
         busy = true
@@ -72,7 +72,7 @@ final class CredentialController {
         }
         guard result == errSecSuccess else {
             status = .error("保存失败（\(result)）")
-            message = "Keychain 保存失败，token 未被记录到应用日志。"
+            message = "macOS 钥匙串保存失败，登录凭证未被记录到应用日志。"
             return
         }
         tokenInput = ""
@@ -90,7 +90,7 @@ final class CredentialController {
         let result = SecItemDelete(baseQuery() as CFDictionary)
         guard result == errSecSuccess || result == errSecItemNotFound else {
             status = .error("删除失败（\(result)）")
-            message = "Keychain 删除失败，请在系统钥匙串中检查。"
+            message = "macOS 钥匙串删除失败，请在“钥匙串访问”中检查。"
             return false
         }
         tokenInput = ""
@@ -102,26 +102,31 @@ final class CredentialController {
     }
 
     func openTokenSetup() {
-        message = openTerminal(command: "claude setup-token")
-            ? "已打开 Terminal；完成官方认证后，把生成的 token 粘贴到下方。"
-            : "无法打开 Terminal；请手动运行 claude setup-token。"
+        guard let installation = currentClaudeCodeInstallation() else {
+            message = "未检测到可执行的 claude 命令。请先安装 Claude Code，或在“实验性沙箱”中选择命令位置。"
+            return
+        }
+        let command = "\(shellQuote(installation.executableURL.path)) setup-token"
+        message = openTerminal(command: command)
+            ? "已打开 Terminal；完成官方认证后，把生成的登录凭证粘贴到下方。"
+            : "无法打开“终端”；请手动运行 \(installation.executableURL.path) setup-token。"
     }
 
     func launchClaudeCode() {
         guard status == .saved else {
-            message = "请先完成 claude setup-token，并保存 token。"
+            message = "请先完成 claude setup-token，并保存登录凭证。"
             return
         }
         guard let token = readToken() else {
-            message = "无法读取 Keychain 中的认证；请确认应用已解锁后重试。"
+            message = "无法从 macOS 钥匙串读取认证；请确认应用已解锁后重试。"
             return
         }
-        guard let path = ApplicationDiscovery.codePaths().first(where: { URL(fileURLWithPath: $0).lastPathComponent == "claude" }) else {
-            message = "未找到可用的 claude 命令；请先安装 Claude Code。"
+        guard let installation = currentClaudeCodeInstallation() else {
+            message = "未找到可用的 claude 命令；请先安装 Claude Code，或在“实验性沙箱”中选择命令位置。"
             return
         }
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: path)
+        task.executableURL = installation.executableURL
         task.environment = [
             "CLAUDE_CODE_OAUTH_TOKEN": token,
             "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
@@ -130,7 +135,7 @@ final class CredentialController {
         ]
         do {
             try task.run()
-            message = "已从 Keychain 读取认证并启动 Claude Code。"
+            message = "已从 macOS 钥匙串读取认证并启动 Claude Code。"
         } catch {
             message = "无法启动 Claude Code，认证未写入日志。"
         }
@@ -138,6 +143,14 @@ final class CredentialController {
 
     func launchToken() -> String? {
         readToken()
+    }
+
+    private func currentClaudeCodeInstallation() -> ClaudeCodeInstallation? {
+        ClaudeCodeDiscovery.locate(
+            manualPath: UserDefaults.standard.string(
+                forKey: ClaudeCodeDiscovery.manualPathPreferenceKey
+            )
+        )
     }
 
     private func readToken() -> String? {
@@ -170,6 +183,10 @@ final class CredentialController {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\\\"")
             .replacingOccurrences(of: "\n", with: "\\n") + "\""
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func baseQuery() -> [String: Any] {

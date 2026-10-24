@@ -138,13 +138,13 @@ public enum GatewayNetworkProbes {
         let traceIP = trace.ip ?? explicitTrace?.ip
         let directPathWorks = info.ip != nil || trace.ip != nil
         let traceDetail = traceIP == nil
-            ? "Claude 跟踪地址没有返回可用出口"
+            ? "经当前路径访问 Claude 跟踪地址时没有返回可用出口"
             : directPathWorks
-                ? "Claude 跟踪地址可用，系统普通请求也取得了出口"
-                : "Claude 跟踪地址可用，系统普通请求没有直接取得出口"
+                ? "Claude 服务路径可用，系统普通请求也取得了出口"
+                : "Claude 服务路径可用，系统普通请求没有直接取得出口"
         checks.append(.init(
             id: "gateway-claude-path",
-            title: "Claude 路径",
+            title: "Claude 服务路径",
             detail: traceDetail,
             level: traceIP == nil ? .failed : .passed
         ))
@@ -156,8 +156,8 @@ public enum GatewayNetworkProbes {
             id: "gateway-exit-consistency",
             title: "出口一致性",
             detail: exitsAgree
-                ? "系统请求与 Claude 路径没有观察到不同的公共出口"
-                : "系统请求与 Claude 路径没有取得一致出口",
+                ? "系统请求与 Claude 服务路径没有观察到不同的公共出口"
+                : "系统请求与 Claude 服务路径没有取得一致出口",
             level: exitsAgree ? .passed : .failed
         ))
 

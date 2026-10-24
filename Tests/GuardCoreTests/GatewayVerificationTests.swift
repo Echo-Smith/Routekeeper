@@ -186,4 +186,53 @@ final class GatewayVerificationTests: XCTestCase {
         XCTAssertEqual(allowedCalls, 1)
         store.stop()
     }
+
+    @MainActor
+    func testSandboxCreationReportsGatewayWarningWithoutBlocking() async {
+        let suite = "routekeeper-sandbox-gateway-gate-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-sandbox-gateway-\(UUID())", isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: temp)
+        }
+        let controller = GatewayVerificationController(
+            defaults: defaults,
+            invalidateLoadedEvidence: false,
+            now: { [start] in start },
+            baselineProbe: { .init(checks: []) },
+            blockedProbe: {
+                .init(id: "blocked", title: "blocked", detail: "passed", level: .passed)
+            }
+        )
+        let sandbox = SandboxCoordinator(
+            preferences: defaults,
+            sessionsRoot: temp.appendingPathComponent("Isolation", isDirectory: true)
+        )
+        sandbox.sharedConfiguration = SandboxSharedConfiguration(
+            projectPath: temp.appendingPathComponent("Project").path,
+            exchangePath: temp.appendingPathComponent("Exchange").path,
+            timezoneIdentifier: "UTC",
+            upstream: IsolationUpstream(port: 7890),
+            enabledTargets: [.claudeDesktop]
+        )
+        let store = GuardStore(
+            defaults: defaults,
+            watchNetwork: false,
+            notificationsEnabled: false,
+            gatewayVerification: controller,
+            sandbox: sandbox
+        )
+        store.settings.experimentalSandboxEnabled = true
+        store.settings.gatewayProtectionMode = .claudeOnly
+        store.settings.targetIP = "1.2.3.4"
+
+        XCTAssertFalse(store.gatewayEvidenceReady)
+        await store.prepareSandbox(target: .claudeDesktop)
+
+        XCTAssertTrue(sandbox.desktopSession.message.contains("代理网关"))
+        XCTAssertFalse(sandbox.desktopSession.message.contains("请先在“网络保护”中完成"))
+        XCTAssertTrue(store.events.contains { $0.message.contains("代理网关检查尚未完成") })
+    }
 }

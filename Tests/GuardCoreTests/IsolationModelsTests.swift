@@ -212,11 +212,21 @@ final class IsolationModelsTests: XCTestCase {
         XCTAssertTrue(checks.contains { $0.id == "external-app" })
 
         let mismatch = SandboxSession.preflightChecks(output.replacingOccurrences(of: "claude-exit-match=1", with: "claude-exit-match=0"))
-        XCTAssertEqual(mismatch.first(where: { $0.id == "claude-exit-match" })?.passed, false)
+        let mismatchCheck = mismatch.first(where: { $0.id == "claude-exit-match" })
+        XCTAssertEqual(mismatchCheck?.passed, false)
+        XCTAssertEqual(mismatchCheck?.isWarning, true)
+        XCTAssertEqual(mismatchCheck?.blocksLaunch, false)
         XCTAssertEqual(
-            mismatch.first(where: { $0.id == "claude-exit-match" })?.detail,
-            "未通过：Claude 路径返回 2001:db8::1，无法与已保存出口核对"
+            mismatchCheck?.detail,
+            "警告：Claude 路径返回 2001:db8::1，无法与已保存出口核对"
         )
+
+        let hardFailure = SandboxSession.preflightChecks(
+            output.replacingOccurrences(of: "direct-network=1", with: "direct-network=0")
+        )
+        let directNetwork = hardFailure.first(where: { $0.id == "direct-network" })
+        XCTAssertEqual(directNetwork?.isWarning, false)
+        XCTAssertEqual(directNetwork?.blocksLaunch, true)
     }
 
     func testSandboxPreflightAcceptsRotatingClaudeIPv6ThroughMatchingRelayIPv4Anchor() {
@@ -261,6 +271,8 @@ final class IsolationModelsTests: XCTestCase {
         )
         let mismatchCheck = mismatch.first { $0.id == "claude-exit-match" }
         XCTAssertEqual(mismatchCheck?.passed, false)
+        XCTAssertEqual(mismatchCheck?.isWarning, true)
+        XCTAssertEqual(mismatchCheck?.blocksLaunch, false)
         XCTAssertTrue(mismatchCheck?.detail.contains("无法与已保存出口核对") == true)
         XCTAssertFalse(mismatchCheck?.detail.contains("完全一致") == true)
     }

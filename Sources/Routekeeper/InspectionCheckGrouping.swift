@@ -29,13 +29,13 @@ enum InspectionCheckGroupKind: String, CaseIterable, Hashable, Identifiable {
         let en = L10n.resolvedEnglish
         switch self {
         case .configuration:
-            return en ? "Targets, scope and probe settings" : "保护对象、目标出口与探测参数"
+            return en ? "Targets, scope and check parameters" : "保护对象、目标出口与检查参数"
         case .localPath:
             return en ? "Address families, DNS, UDP and TUN routing" : "地址族、DNS、UDP 与 TUN 路由"
         case .externalServices:
             return en ? "Exits observed locally and by external services" : "代理、系统与外部服务看到的出口"
         case .claudeEnvironment:
-            return en ? "Process and client discovery" : "进程与 Claude 客户端识别"
+            return en ? "Processes, live connections and client environment" : "进程、实时连接与客户端环境"
         case .additional:
             return en ? "Uncategorised evidence retained for compatibility" : "为兼容新检查保留的未分类证据"
         }
@@ -77,7 +77,7 @@ enum InspectionCheckGroupKind: String, CaseIterable, Hashable, Identifiable {
         "proxy-exit", "tun-exit", "ipinfo-exit", "claude-trace-exit"
     ]
     private static let claudeEnvironmentIDs: Set<String> = [
-        "process-access", "desktop", "code"
+        "process-access", "claude-process-network", "desktop", "code", "code-environment"
     ]
 }
 

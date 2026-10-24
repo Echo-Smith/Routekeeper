@@ -70,15 +70,17 @@ final class PresentationTests: XCTestCase {
             CheckItem("ipinfo-exit", "ipinfo", "", .passed),
             CheckItem("claude-trace-exit", "trace", "", .passed),
             CheckItem("process-access", "process", "", .passed),
+            CheckItem("claude-process-network", "process network", "", .passed),
             CheckItem("desktop", "desktop", "", .passed),
             CheckItem("code", "code", "", .passed),
+            CheckItem("code-environment", "code environment", "", .passed),
             CheckItem("boundary", "boundary", "", .warning)
         ]
 
         let groups = InspectionCheckGrouping.groups(from: checks)
 
         XCTAssertEqual(groups.map(\.kind), [.configuration, .localPath, .externalServices, .claudeEnvironment])
-        XCTAssertEqual(groups.map(\.checks.count), [6, 6, 4, 3])
+        XCTAssertEqual(groups.map(\.checks.count), [6, 6, 4, 5])
         XCTAssertFalse(groups.flatMap(\.checks).contains { $0.id == "boundary" })
         XCTAssertTrue(groups.allSatisfy { $0.level == .passed })
     }
@@ -155,6 +157,17 @@ final class PresentationTests: XCTestCase {
                 fileCount: 1,
                 exists: true,
                 blockedReason: .processRunning
+            ),
+            CleanupTarget(
+                path: "/test/past-session",
+                labelZh: "past session",
+                labelEn: "past session",
+                kindZh: "log",
+                kindEn: "log",
+                scope: .pastSession,
+                sizeBytes: 30,
+                fileCount: 1,
+                exists: true
             )
         ]))
 
@@ -217,7 +230,8 @@ final class PresentationTests: XCTestCase {
         )
 
         store.settings.experimentalSandboxEnabled = true
-        store.sandbox.phase = .networkPaused
+        store.sandbox.sharedConfiguration.enabledTargets = [.claudeCode]
+        store.sandbox.codeSession.phase = .networkPaused
         await store.check()
 
         XCTAssertEqual(store.title, "网络已关闭")
@@ -225,6 +239,53 @@ final class PresentationTests: XCTestCase {
         let callCount = await calls.count()
         XCTAssertEqual(callCount, 0)
         XCTAssertFalse(store.monitoring)
+    }
+
+    @MainActor func testSandboxModeAllowsHostInspectionUntilSessionBecomesActive() async {
+        actor Calls {
+            private(set) var value = 0
+            func increment() { value += 1 }
+            func count() -> Int { value }
+        }
+        let calls = Calls()
+        let suite = "guard-sandbox-inspection-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = GuardStore(
+            defaults: defaults,
+            watchNetwork: false,
+            notificationsEnabled: false,
+            runDiagnostic: { settings in
+                await calls.increment()
+                return DiagnosticSnapshot(
+                    settings: settings,
+                    checks: [.init("network", "network", "test", .passed)],
+                    proxyIP: "1.2.3.4",
+                    tunnelIP: "1.2.3.4",
+                    processes: [],
+                    desktopPath: nil,
+                    codePaths: []
+                )
+            }
+        )
+
+        store.settings.experimentalSandboxEnabled = true
+        store.sandbox.sharedConfiguration.enabledTargets = [.claudeCode]
+        store.sandbox.codeSession.phase = .ready
+
+        await store.check()
+
+        let firstCallCount = await calls.count()
+        XCTAssertEqual(firstCallCount, 1)
+        XCTAssertNotNil(store.snapshot)
+        XCTAssertFalse(store.monitoring)
+
+        store.sandbox.codeSession.phase = .running
+        await store.check()
+
+        let secondCallCount = await calls.count()
+        XCTAssertEqual(secondCallCount, 1)
+        XCTAssertTrue(store.notice.contains("结束"))
     }
 
     @MainActor func testSandboxConfigurationPersistsWithoutProxyPassword() throws {
@@ -278,6 +339,32 @@ final class PresentationTests: XCTestCase {
         XCTAssertFalse(session.persistedClaudeProfileAvailable)
     }
 
+    @MainActor func testManuallySelectedClaudeCodeCommandPersistsAcrossSessions() throws {
+        let suite = "guard-claude-command-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routekeeper-claude-command-\(UUID())", isDirectory: true)
+        let command = temp.appendingPathComponent("claude")
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: temp)
+        }
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: command)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: command.path
+        )
+
+        let session = SandboxSession(preferences: defaults)
+        XCTAssertTrue(session.selectClaudeCodeCommand(at: command))
+        XCTAssertEqual(session.claudeCodeInstallation?.source, .manuallySelected)
+
+        let restored = SandboxSession(preferences: defaults)
+        XCTAssertEqual(restored.claudeCodeInstallation?.executableURL, command.standardizedFileURL)
+        XCTAssertEqual(restored.claudeCodeInstallation?.source, .manuallySelected)
+    }
+
     @MainActor func testManualNetworkPauseSurvivesSleepAndNeverAutoResumes() {
         let suite = "guard-manual-pause-sleep-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
@@ -318,7 +405,7 @@ final class PresentationTests: XCTestCase {
 
         let gateway = GatewayVerificationController(defaults: defaults, invalidateLoadedEvidence: false)
         let egress = EgressAuditController(defaults: defaults)
-        let sandbox = SandboxSession(preferences: defaults, sessionsRoot: sessionsRoot)
+        let sandbox = SandboxCoordinator(preferences: defaults, sessionsRoot: sessionsRoot)
         let store = GuardStore(
             defaults: defaults,
             watchNetwork: false,
@@ -428,17 +515,21 @@ final class PresentationTests: XCTestCase {
     func testSandboxProtectionAndAuthenticationAreTopLevelNavigation() throws {
         let pages = GuardPage.allCases
         XCTAssertTrue(pages.contains(.sandbox))
-        XCTAssertLessThan(try XCTUnwrap(pages.firstIndex(of: .sandbox)),
-                          try XCTUnwrap(pages.firstIndex(of: .networkProtection)))
-        XCTAssertEqual(GuardPage.sandbox.title, "沙箱")
+        XCTAssertLessThan(
+            try XCTUnwrap(GuardPage.primaryNavigation.firstIndex(of: .networkProtection)),
+            try XCTUnwrap(GuardPage.primaryNavigation.firstIndex(of: .sandbox))
+        )
+        XCTAssertEqual(GuardPage.sandbox.title, "实验性沙箱")
+        XCTAssertEqual(GuardPage.sandbox.sidebarTitle, "沙箱")
+        XCTAssertEqual(GuardPage.sandbox.sidebarBadge, "实验性")
         XCTAssertEqual(GuardPage.networkProtection.title, "网络保护")
-        XCTAssertEqual(GuardPage.authentication.title, "Claude Code 登录凭证")
+        XCTAssertEqual(GuardPage.authentication.title, "Claude 登录")
         XCTAssertEqual(GuardPage.authentication.navigationTitle, "登录凭证")
         XCTAssertTrue(GuardPage.primaryNavigation.contains(.networkProtection))
+        XCTAssertFalse(GuardPage.primaryNavigation.contains(.inspection))
         XCTAssertFalse(GuardPage.primaryNavigation.contains(.authentication))
         XCTAssertTrue(GuardPage.toolNavigation.contains(.authentication))
         XCTAssertEqual(GuardPage.toolNavigation, [.authentication, .activity, .cleanup])
-        XCTAssertEqual(SandboxSection.allCases, [.overview, .scope, .network, .diagnostics])
     }
 
     @MainActor

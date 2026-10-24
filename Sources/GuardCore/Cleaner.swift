@@ -196,7 +196,8 @@ public enum CacheCleaner {
         home: String,
         sessionsRoot: URL? = nil,
         profilesRoot: URL? = nil,
-        currentSessionRoot: URL? = nil
+        currentSessionRoot: URL? = nil,
+        currentSessionRoots: Set<URL> = []
     ) -> CleanupPlan {
         let homeURL = URL(fileURLWithPath: home, isDirectory: true)
         let applicationSupport = homeURL.appendingPathComponent("Library/Application Support/Routekeeper", isDirectory: true)
@@ -209,9 +210,9 @@ public enum CacheCleaner {
 
         let sessions = ownedSessionRoots(in: resolvedSessionsRoot, warnings: &warnings)
         for root in sessions {
-            let isCurrent = currentSessionRoot.map {
-                $0.standardizedFileURL.path == root.standardizedFileURL.path
-            } ?? false
+            let normalizedRoot = root.standardizedFileURL
+            let isCurrent = currentSessionRoot?.standardizedFileURL == normalizedRoot
+                || currentSessionRoots.contains { $0.standardizedFileURL == normalizedRoot }
             definitions += sessionDefinitions(
                 root: root,
                 scope: isCurrent ? .currentSession : .pastSession
@@ -260,13 +261,15 @@ public enum CacheCleaner {
         home: String,
         sessionsRoot: URL? = nil,
         profilesRoot: URL? = nil,
-        currentSessionRoot: URL? = nil
+        currentSessionRoot: URL? = nil,
+        currentSessionRoots: Set<URL> = []
     ) -> CleanupPlan {
         var plan = scan(
             home: home,
             sessionsRoot: sessionsRoot,
             profilesRoot: profilesRoot,
-            currentSessionRoot: currentSessionRoot
+            currentSessionRoot: currentSessionRoot,
+            currentSessionRoots: currentSessionRoots
         )
         let safety = liveSafety(
             home: home,
@@ -551,7 +554,7 @@ public enum CacheCleaner {
             root.appendingPathComponent("logs", isDirectory: true).path,
             labelZh: "沙箱会话日志" + suffixZh,
             labelEn: "Sandbox session logs" + suffixEn,
-            kindZh: "启动、网络与 Science daemon 日志",
+            kindZh: "启动、网络与 Science 服务日志",
             kindEn: "Launch, network and Science daemon logs",
             scope: scope,
             owningRoot: root.path

@@ -255,7 +255,10 @@ struct EgressAuditPage: View {
                           systemImage: "waveform.path.ecg.rectangle")
                 }
                 .routekeeperProminentButton()
-                .disabled(audit.busy || store.checking)
+                .disabled(audit.busy || store.checking || !store.canRunNetworkInspection)
+                .help(store.canRunNetworkInspection
+                      ? text("运行出口体检", "Run egress check")
+                      : text("结束沙箱会话后可运行网络检查", "End the sandbox session to run network checks"))
                 .accessibilityIdentifier("egress-run")
                 if audit.busy || store.checking { ProgressView().controlSize(.small) }
                 if let report = audit.report {
@@ -279,7 +282,7 @@ struct EgressAuditPage: View {
                         "Query third-party IP intelligence (sends exit IP externally)"),
                    isOn: $includeIntelligence)
                 .toggleStyle(.switch)
-            Text(text("自动体检会在 App 启动后、网络变化后以及每 \(store.automaticEgressAuditIntervalMinutes) 分钟运行；自动体检始终不查询第三方 IP 信息。手动运行只使用 45 秒内的自检快照，过期会先自动复核。",
+            Text(text("自动体检会在应用启动后、网络变化后以及每 \(store.automaticEgressAuditIntervalMinutes) 分钟运行；自动体检始终不查询第三方 IP 信息。手动运行只使用 45 秒内的自检快照，过期会先自动复核。",
                       "Automatic checks run after launch, after network changes and every \(store.automaticEgressAuditIntervalMinutes) minutes. Automatic checks never query third-party intelligence. Manual checks use a snapshot no older than 45 seconds and refresh it first when needed."))
                 .routekeeperFont(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -732,7 +735,7 @@ struct EgressAuditPage: View {
                     symbol: "pin"
                 )
                 guidanceRow(
-                    text("不需要 IPv6 时，优先让 Claude/Code 规则只解析 IPv4；IPv6 的 AAAA 路径更容易绕过只匹配 A 记录或域名的分流规则。",
+                    text("不需要 IPv6 时，优先让 Claude 与 Claude Code 的规则只解析 IPv4；IPv6 的 AAAA 路径更容易绕过只匹配 A 记录或域名的分流规则。",
                          "If IPv6 is unnecessary, prefer IPv4-only resolution for Claude/Code. AAAA paths can bypass rules that only match A records or domains."),
                     symbol: "arrow.left.arrow.right"
                 )
@@ -885,7 +888,7 @@ struct EgressAuditPage: View {
     }
 
     private var caveatCard: some View {
-        Text(text("边界：Routekeeper 不读取 Claude Cookie、认证 Token 或对话内容，也不复刻浏览器 Canvas/WebGL 指纹。出口体检与 Claude 服务可达性探测不能证明账号没有被限制，也不能预测封号；网络波动、Cloudflare 验证和第三方 IP 信息缺失都可能造成误判。",
+        Text(text("边界：Routekeeper 不读取 Claude 的 Cookie、登录凭证或对话内容，也不复刻浏览器 Canvas/WebGL 指纹。出口体检与 Claude 服务可达性探测不能证明账号没有被限制，也不能预测封号；网络波动、Cloudflare 验证和第三方 IP 信息缺失都可能造成误判。",
                   "Boundary: Routekeeper does not read Claude cookies, auth tokens or conversations, and does not replicate browser Canvas/WebGL fingerprints. This check cannot prove an account is unrestricted or predict account actions. Network failures, Cloudflare challenges and missing third-party intelligence can all cause false conclusions."))
             .routekeeperFont(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

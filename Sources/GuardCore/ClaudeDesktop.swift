@@ -72,17 +72,16 @@ public enum ClaudeDesktopDiscovery {
         candidates.append("/Applications/Claude Science.app")
         candidates.append(NSHomeDirectory() + "/Applications/Claude.app")
         candidates.append(NSHomeDirectory() + "/Applications/Claude Science.app")
+        let volumeKeys: Set<URLResourceKey> = [.volumeIsLocalKey]
         let mountedVolumes = FileManager.default.mountedVolumeURLs(
-            includingResourceValuesForKeys: nil,
+            includingResourceValuesForKeys: Array(volumeKeys),
             options: [.skipHiddenVolumes]
         ) ?? []
-        let volumeRoots = URL(fileURLWithPath: "/Volumes", isDirectory: true)
-        let visibleVolumeRoots = (try? FileManager.default.contentsOfDirectory(
-            at: volumeRoots,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
-        for volume in Array(Set(mountedVolumes + visibleVolumeRoots)) {
+        for volume in mountedVolumes {
+            // App discovery must never read a network volume just to look for Claude.
+            guard (try? volume.resourceValues(forKeys: volumeKeys).volumeIsLocal) == true else {
+                continue
+            }
             for name in ["Claude.app", "Claude Science.app"] {
                 candidates.append(volume.appendingPathComponent(name).path)
                 candidates.append(volume.appendingPathComponent("Applications/\(name)").path)

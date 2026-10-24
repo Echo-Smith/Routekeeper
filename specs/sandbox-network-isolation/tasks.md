@@ -1,0 +1,46 @@
+# Implementation Plan
+
+- [ ] 1. Add `RelayPolicy` and session network lease
+  - Implement pure allow/deny rules for domain, IP, CIDR and port ranges.
+  - Store policy fingerprint and relay generation without credentials.
+  - Cover malformed hosts, IPv6, local ranges and default deny with tests.
+  - _Requirement: 3, 4, 7_
+- [ ] 2. Integrate policy into `LocalRelay`
+  - Run policy after HTTP CONNECT / SOCKS5 parsing and before upstream dial.
+  - Return stable rejection reasons and preserve session credential checks.
+  - Add HTTP/SOCKS integration tests for allowed, policy-denied and local-denied targets.
+  - _Requirement: 3, 4_
+- [ ] 3. Add optional upstream interface binding
+  - Allow binding by validated interface name/index or local source address.
+  - Fail closed when the selected interface is missing or dial fails.
+  - _Requirement: 5_
+- [ ] 4. Extend NE `FilterScope` for managed browsers
+  - Add browser roots, bundle IDs and signing identifiers alongside Claude/Code.
+  - Keep UID matching and process re-resolution to resist PID reuse.
+  - Allow only the session relay loopback endpoint.
+  - _Requirement: 1, 2, 3_
+- [ ] 5. Build managed browser sandbox session
+  - Reuse isolated HOME/profile/session layout and per-session relay.
+  - Launch with explicit proxy, disabled QUIC and WebRTC-safe policies.
+  - Show browser network lease and filter status in sandbox UI.
+  - _Requirement: 3, 7, 9_
+- [ ] 6. Coordinate NE, relay and sandbox lifecycle
+  - Before launch: install/approve filter, start relay, then launch sandbox.
+  - On relay loss or network change: pause network and invalidate lease.
+  - On shutdown: end sandbox before disabling filter.
+  - _Requirement: 1, 2, 6, 7_
+- [ ] 7. Add proof harness for no direct egress
+  - Extend bounded capture reporting with protected-process / non-relay destination criteria.
+  - Record missing attribution and empty captures as unknown.
+  - Add STUN/WebRTC browser cases to the manual matrix.
+  - _Requirement: 8, 9_
+- [ ] 8. Update signed release path
+  - Validate development and Developer ID entitlement/profile combinations.
+  - Keep unavailable signing as an explicit non-enforcing diagnostic state.
+  - Document provider crash/restart and system upgrade limitations.
+  - _Requirement: 6_
+- [ ] 9. Real-device acceptance
+  - Verify Claude Desktop, Claude Code and managed browser separately.
+  - Capture physical/tunnel interfaces during positive and proxy-failure runs.
+  - Verify unrelated apps remain unaffected and provider restart recovers policy.
+  - _Requirement: 1, 2, 6, 8, 9_

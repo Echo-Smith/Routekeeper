@@ -42,11 +42,11 @@ final class FilterController: NSObject, OSSystemExtensionRequestDelegate {
         }
         guard let appProfile = Self.provisioningInformation(at: Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")),
               let filterProfile = Self.provisioningInformation(at: extensionURL.appendingPathComponent("Contents/embedded.provisionprofile")) else {
-            return "缺少可解析的 App 或系统扩展 provisioning profile"
+            return "缺少可解析的应用或系统扩展描述文件"
         }
         guard Self.profileMatches(appProfile, teamID: appTeam, bundleID: "local.routekeeper.macos", requireInstall: true),
               Self.profileMatches(filterProfile, teamID: extTeam, bundleID: Self.bundleID, requireInstall: false) else {
-            return "provisioning profile 的 Team ID、App ID 或授权不匹配"
+            return "描述文件的 Team ID、App ID 或授权不匹配"
         }
         return nil
     }

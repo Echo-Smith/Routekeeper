@@ -37,6 +37,12 @@ current artifact supports Apple Silicon only.
   DNS resolver checks, and bounded UDP/STUN checks.
 - Network service reachability checks for the endpoints configured by the
   application.
+- An explainable Protection completeness score in Overview. It summarizes only
+  applicable evidence, never treats disabled optional features as failures, and
+  never blocks Claude, monitoring, sign-in or the experimental sandbox.
+- Live Claude process evidence uses TCP connection counts plus redacted proxy,
+  custom API, locale and timezone variable metadata. Raw environment values,
+  arguments and credentials are not stored in reports.
 - Sleep, wake, path, DNS, proxy, and address-change invalidation. Unknown
   evidence never counts as a pass.
 - A staged proxy-gateway check for the current path, overseas-node failure,
@@ -168,12 +174,14 @@ bash scripts/build-dmg.sh
 `build-dmg.sh` creates a draggable-to-Applications DMG for local distribution.
 Build output and signing profiles are excluded from Git.
 
-The test suite currently contains 148 tests covering route evidence, IPv6,
-DNS/UDP probes, report redaction, monitoring state, process scope, capture
+The test suite currently contains 203 tests (3 environment-gated skips)
+covering route evidence, IPv6, DNS/UDP probes, report redaction, monitoring
+state, process scope, capture
 validation, presentation behavior, local relay protocols, Seatbelt file and
 network enforcement, system-proxy alignment, localhost-listener blocking,
 child-process inheritance, sandbox status handling, local-data reset boundaries,
-proxy-gateway evidence freshness and launch gating, official Claude Science
+proxy-gateway evidence freshness, ordinary-monitoring and desktop launch gating,
+the sandbox's warning-only policy, official Claude Science
 discovery and daemon startup, control-socket access, two-port WebKit rules,
 content-rule compilation, one-time nonce redaction, the rotating-IPv6
 stable-IPv4 anchor, ownership-marker boundaries, symbolic-link refusal,

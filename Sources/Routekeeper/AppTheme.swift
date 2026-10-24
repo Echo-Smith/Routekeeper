@@ -1,7 +1,42 @@
 import AppKit
+import GuardCore
 import SwiftUI
 
 let appAccent = Color(red: 0, green: 0.443, blue: 0.89)
+let appStatusSuccess = Color.green
+let appStatusWarning = Color.orange
+let appStatusFailure = Color.red
+
+extension CheckLevel {
+    var routekeeperStatusColor: Color {
+        switch self {
+        case .passed: return appStatusSuccess
+        case .failed: return appStatusFailure
+        case .warning, .unknown: return appStatusWarning
+        }
+    }
+}
+
+extension EgressAssessmentLevel {
+    var routekeeperStatusColor: Color {
+        switch self {
+        case .clear: return appStatusSuccess
+        case .attention: return appStatusFailure
+        case .insufficient: return appStatusWarning
+        }
+    }
+}
+
+extension GatewayVerificationStatus {
+    var routekeeperStatusColor: Color {
+        switch self {
+        case .verified: return appStatusSuccess
+        case .failed, .expired: return appStatusFailure
+        case .unverified, .needsNodeFailureTest, .needsClientExitTest, .needsRecovery:
+            return appStatusWarning
+        }
+    }
+}
 
 enum AppSurfaceTone {
     case primary
@@ -43,24 +78,6 @@ private struct AppSurfaceModifier: ViewModifier {
 }
 
 extension View {
-    @ViewBuilder
-    func routekeeperScrollEdge() -> some View {
-        if #available(macOS 26.0, *) {
-            self.scrollEdgeEffectStyle(.soft, for: .top)
-        } else {
-            self
-        }
-    }
-
-    @ViewBuilder
-    func routekeeperScaledNavigationTitle() -> some View {
-        if #available(macOS 26.0, *) {
-            self.toolbar(removing: .title)
-        } else {
-            self
-        }
-    }
-
     func appSurface(_ tone: AppSurfaceTone = .primary, corner: CGFloat = 14) -> some View {
         modifier(AppSurfaceModifier(tone: tone, corner: corner))
     }

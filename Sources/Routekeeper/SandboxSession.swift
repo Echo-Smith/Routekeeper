@@ -31,8 +31,12 @@ enum SandboxPauseReason: Equatable {
 final class SandboxSession {
     var phase: IsolationPhase = .ready
     var configuration: IsolationConfiguration {
-        didSet { persistConfiguration() }
+        didSet {
+            persistConfiguration()
+            configurationDidChange?(configuration)
+        }
     }
+    @ObservationIgnored var configurationDidChange: ((IsolationConfiguration) -> Void)?
     var checks: [IsolationCheck] = []
     var message = "选择项目和交换文件夹后，可以创建隔离会话。"
     var sessionRoot: URL?
@@ -45,6 +49,7 @@ final class SandboxSession {
     var detectedProxy: SystemProxyDescriptor?
     var expectedExits = IsolationExpectedExits()
     var proxyDetectionMessage = "创建会话时会重新读取当前系统代理。"
+    var claudeCodeInstallation: ClaudeCodeInstallation? = nil
     var desktopInstallation: ClaudeDesktopInstallation? = nil
     var desktopAppRunningOutsideSandbox = false
     var claudeLoginCallbackStatus: ClaudeLoginCallbackStatus = .idle
@@ -67,44 +72,49 @@ final class SandboxSession {
     @ObservationIgnored private var networkValidationTask: Task<Void, Never>?
     @ObservationIgnored private var networkValidationGeneration = 0
     @ObservationIgnored private var lastAcceptedNetworkFingerprint: NetworkFingerprint?
+    @ObservationIgnored private let persistsConfiguration: Bool
 
     private static let configurationKey = "routekeeper-isolation-configuration-v1"
 
     init(
         preferences: UserDefaults = .standard,
         sessionsRoot: URL? = nil,
-        profilesRoot: URL? = nil
+        profilesRoot: URL? = nil,
+        initialConfiguration: IsolationConfiguration? = nil,
+        persistsConfiguration: Bool = true
     ) {
         self.preferences = preferences
+        self.persistsConfiguration = persistsConfiguration
         let applicationSupport = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("Library/Application Support/Routekeeper", isDirectory: true)
         self.sessionsRoot = sessionsRoot
             ?? applicationSupport.appendingPathComponent("Isolation", isDirectory: true)
         self.profilesRoot = profilesRoot
             ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
-        if let data = preferences.data(forKey: Self.configurationKey),
-           let saved = try? JSONDecoder().decode(IsolationConfiguration.self, from: data) {
-            var sanitized = saved
-            sanitized.upstream.password = ""
-            configuration = sanitized
-            if let sanitizedData = try? JSONEncoder().encode(sanitized) {
-                preferences.set(sanitizedData, forKey: Self.configurationKey)
-            }
-        } else {
-            configuration = IsolationConfiguration()
+        var loaded = initialConfiguration
+        if loaded == nil,
+           let data = preferences.data(forKey: Self.configurationKey) {
+            loaded = try? JSONDecoder().decode(IsolationConfiguration.self, from: data)
+        }
+        var sanitized = loaded ?? IsolationConfiguration()
+        sanitized.upstream.password = ""
+        configuration = sanitized
+        if persistsConfiguration,
+           let sanitizedData = try? JSONEncoder().encode(sanitized) {
+            preferences.set(sanitizedData, forKey: Self.configurationKey)
         }
         persistedClaudeProfileAvailable = Self.hasOwnedClaudeProfile(
             at: self.profilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
         )
-        refreshDesktopDiscovery()
+        refreshInstalledApplications()
         recoverOrphanedSessions()
     }
 
     var canPrepare: Bool {
-        configuration.hasRequiredPaths && configuration.hasValidTimezone
+        configuration.hasRequiredPaths && configuration.hasValidTimezone && configuration.hasValidLanguage
             && configuration.upstream.isValid && !busy && !phase.isActive
             && (detectedProxy?.isLoopback != false)
-            && desktopIsolationSupported
+            && targetInstallationReady
     }
 
     var canLaunchClaude: Bool {
@@ -115,9 +125,20 @@ final class SandboxSession {
         configuration.target != .claudeDesktop || desktopInstallation != nil
     }
 
+    var codeInstalled: Bool {
+        configuration.target != .claudeCode || claudeCodeInstallation != nil
+    }
+
     var desktopIsolationSupported: Bool {
         configuration.target != .claudeDesktop
             || desktopInstallation?.supportsIsolatedLaunch == true
+    }
+
+    var targetInstallationReady: Bool {
+        switch configuration.target {
+        case .claudeCode: return claudeCodeInstallation != nil
+        case .claudeDesktop: return desktopIsolationSupported
+        }
     }
 
     var canPauseNetwork: Bool { !busy && phase == .running }
@@ -130,6 +151,14 @@ final class SandboxSession {
         switch phase {
         case .disabled: return "未开启"
         case .ready:
+            if configuration.target == .claudeCode, claudeCodeInstallation == nil {
+                return "未检测到 Claude Code"
+            }
+            if configuration.target == .claudeDesktop, !desktopIsolationSupported {
+                return desktopInstallation == nil
+                    ? "未检测到 Claude Desktop"
+                    : "Claude Desktop 无法隔离启动"
+            }
             return configuration.hasRequiredPaths ? "可以创建会话" : "等待选择会话范围"
         case .preparing: return "正在准备隔离环境"
         case .checking: return "正在验证隔离边界"
@@ -154,7 +183,7 @@ final class SandboxSession {
     }
 
     var sessionLocaleIdentifier: String {
-        IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
+        IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
     }
 
     var configurationMatchesDetectedProxy: Bool {
@@ -210,18 +239,55 @@ final class SandboxSession {
         desktopAppRunningOutsideSandbox = !ClaudeDesktopDiscovery.runningBundleIdentifiers().isEmpty
     }
 
+    func refreshClaudeCodeDiscovery() {
+        claudeCodeInstallation = ClaudeCodeDiscovery.locate(
+            manualPath: preferences.string(forKey: ClaudeCodeDiscovery.manualPathPreferenceKey)
+        )
+    }
+
+    func refreshInstalledApplications() {
+        refreshClaudeCodeDiscovery()
+        refreshDesktopDiscovery()
+    }
+
+    @discardableResult
+    func selectClaudeCodeCommand(at url: URL) -> Bool {
+        guard let installation = ClaudeCodeDiscovery.inspect(
+            executableURL: url,
+            source: .manuallySelected
+        ) else {
+            message = "所选文件不是可执行的 claude 命令。请选择文件名称为 claude 的可执行文件。"
+            return false
+        }
+        preferences.set(
+            installation.executableURL.path,
+            forKey: ClaudeCodeDiscovery.manualPathPreferenceKey
+        )
+        claudeCodeInstallation = installation
+        message = "已选择现有 Claude Code 命令；Routekeeper 会直接使用它，不会复制或覆盖安装。"
+        return true
+    }
+
     func prepare(expectedExits: IsolationExpectedExits) async {
         self.expectedExits = expectedExits
         refreshDetectedProxy(alignIfNeeded: true)
-        refreshDesktopDiscovery()
+        refreshInstalledApplications()
+        if configuration.target == .claudeCode, claudeCodeInstallation == nil {
+            message = "未检测到可执行的 claude 命令。请先安装 Claude Code，或在本卡片中选择命令后重试。"
+            return
+        }
         if configuration.target == .claudeDesktop, desktopInstallation == nil {
-            message = "没有找到已验证签名的官方 Claude Desktop。请先从 Anthropic 官方渠道安装并完成一次正常启动。"
+            message = "没有找到已验证签名的官方 Claude Desktop。请先从 Anthropic 官方渠道安装，再返回本页重新检测。"
+            return
+        }
+        if configuration.target == .claudeDesktop, !desktopIsolationSupported {
+            message = "已找到 Claude Desktop，但当前版本没有可用于隔离启动的官方入口。请更新官方客户端后重新检测。"
             return
         }
         guard canPrepare else {
             message = detectedProxy?.isLoopback == false
                 ? "当前系统代理不是本机端口。请先在代理客户端开启本机 HTTP 或 SOCKS 入口。"
-                : "请先填写项目和交换文件夹，并确认时区与本地代理端口。"
+                : "请先填写项目和交换文件夹，并确认时区、语言与本地代理端口。"
             return
         }
         guard expectedExits.hasAny else {
@@ -282,7 +348,7 @@ final class SandboxSession {
             )
             activeExecutable = result.executable
 
-            guard checks.allSatisfy(\.passed) else {
+            guard !checks.contains(where: \.blocksLaunch) else {
                 relay.pause()
                 phase = .failed
                 networkEnabled = false
@@ -298,9 +364,12 @@ final class SandboxSession {
                 proxy: proxyAtStart,
                 upstream: configuration.upstream
             )
+            let warningSuffix = checks.contains(where: { $0.isWarning && !$0.passed })
+                ? "出口核对有警告，但安全边界已通过；会话按你的选择继续。"
+                : ""
             message = configuration.target == .claudeDesktop
-                ? "文件、系统代理、官方客户端签名和保存出口均已验证。下一步可启动官方 Claude Desktop。"
-                : "文件、系统代理、Claude 路径和保存出口均已验证。下一步可在终端启动 Claude Code。"
+                ? "文件、系统代理、官方客户端签名和断网边界已验证。\(warningSuffix)下一步可启动官方 Claude Desktop。"
+                : "文件、系统代理、中继路径和断网边界已验证。\(warningSuffix)下一步可在终端启动 Claude Code。"
         } catch {
             relay.stop()
             networkEnabled = false
@@ -322,10 +391,9 @@ final class SandboxSession {
             message = "找不到本次沙箱会话目录，请重新创建。"
             return
         }
-        guard let executable = ApplicationDiscovery.codePaths()
-            .map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath() })
-            .first(where: { $0.lastPathComponent == "claude" }) else {
-            message = "没有找到可用的 Claude Code 命令，请先完成安装。"
+        refreshClaudeCodeDiscovery()
+        guard let executable = claudeCodeInstallation?.executableURL else {
+            message = "没有找到可用的 Claude Code 命令。请先安装 Claude Code，或在本卡片中选择命令。"
             return
         }
         let layout = IsolationSessionLayout(root: root)
@@ -474,7 +542,7 @@ final class SandboxSession {
             callback = try ClaudeLoginCallback.parse(rawLink)
         } catch {
             claudeLoginCallbackStatus = .invalid
-            claudeLoginCallbackMessage = "链接格式无效。只接受 Claude 官方 magic link、SSO 或 Google 登录回调。"
+            claudeLoginCallbackMessage = "链接格式无效。只接受 Claude 官方一次性登录链接、SSO 或 Google 登录回调。"
             return false
         }
 
@@ -519,7 +587,7 @@ final class SandboxSession {
                 self.claudeLoginCallbackStatus = .delivered
                 self.claudeLoginCallbackMessage = switch callback.kind {
                 case .magicLink:
-                    "magic link 已交给沙箱中的 Claude。请等待客户端完成登录，不要再次在浏览器中打开邮件链接。"
+                    "一次性登录链接已交给沙箱中的 Claude。请等待客户端完成登录，不要再次在浏览器中打开邮件链接。"
                 case .ssoCallback:
                     "SSO 回调已交给沙箱中的 Claude。请等待客户端完成登录。"
                 case .googleAuth:
@@ -552,7 +620,10 @@ final class SandboxSession {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
         process.arguments = ["-f", layout.profile.path, installation.executableURL.path]
         process.arguments?.append(
-            contentsOf: Self.desktopLocaleLaunchArguments(for: configuration.timezoneIdentifier)
+            contentsOf: Self.desktopLocaleLaunchArguments(
+                for: configuration.timezoneIdentifier,
+                languageIdentifier: configuration.languageIdentifier
+            )
         )
         guard let proxyURL = relay.socks5URL() else { throw LocalRelayError.stopped }
         process.arguments?.append("--no-sandbox")
@@ -595,7 +666,7 @@ final class SandboxSession {
         desktopAppRunningOutsideSandbox = true
         message = phase == .networkPaused
             ? "Claude Desktop 已在沙箱中启动；网络当前关闭，恢复网络后才能访问代理。"
-            : "Claude Desktop 已在沙箱中启动；Chat 的内置网页工作区和由本次实例派生的 helper 进程会沿用相同的文件与网络限制。启动后仍会持续审计监听地址。"
+            : "Claude Desktop 已在沙箱中启动；Chat 的内置网页工作区和由本次实例派生的辅助进程会沿用相同的文件与网络限制。启动后仍会持续审计监听地址。"
         beginProcessChecks(profile: layout.profile)
     }
 
@@ -610,7 +681,7 @@ final class SandboxSession {
             throw NSError(
                 domain: "Routekeeper.Science",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "官方 Science 包内没有通过签名校验的 Web daemon。"]
+                userInfo: [NSLocalizedDescriptionKey: "官方 Science 包内没有通过签名校验的本地服务。"]
             )
         }
         let log = try ScienceProcessLog(
@@ -646,7 +717,7 @@ final class SandboxSession {
             throw NSError(
                 domain: "Routekeeper.Science",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Claude Science daemon 启动后立即退出，请查看会话日志。"]
+                userInfo: [NSLocalizedDescriptionKey: "Claude Science 服务启动后立即退出，请查看会话日志。"]
             )
         }
 
@@ -659,7 +730,7 @@ final class SandboxSession {
         desktopAppRunningOutsideSandbox = true
         message = phase == .networkPaused
             ? "Claude Science 已在沙箱中启动；网络当前关闭，恢复网络后才能完成本机窗口登录。"
-            : "Claude Science 沙箱 daemon 已启动，正在准备 Routekeeper 受控窗口。"
+            : "Claude Science 沙箱服务已启动，正在准备 Routekeeper 受控窗口。"
         beginProcessChecks(profile: layout.profile)
         beginHostedScienceWindow(
             log: log,
@@ -719,7 +790,7 @@ final class SandboxSession {
                         code: 3,
                         userInfo: [
                             NSLocalizedDescriptionKey: sawAuditError
-                                ?? "Science daemon 没有同时暴露应用和预览两个回环端口。"
+                                ?? "Science 服务没有同时暴露应用和预览两个回环端口。"
                         ]
                     )
                 }
@@ -739,11 +810,11 @@ final class SandboxSession {
                     self.scienceWindow = nil
                     self.terminateClaudeProcesses()
                     self.claudeRunning = false
-                    self.message = "Science 窗口已关闭，daemon 已停止。可重新启动或结束本次会话。"
+                    self.message = "Science 窗口已关闭，本地服务已停止。可重新启动或结束本次会话。"
                 }
                 self.message = self.phase == .networkPaused
                     ? "Claude Science 窗口已打开；网络当前关闭，恢复网络后才能继续使用。"
-                    : "Claude Science 已在 Routekeeper 窗口中运行；WebView 只能访问 daemon 的两个回环端口。"
+                    : "Claude Science 已在 Routekeeper 窗口中运行；网页视图只能访问本地服务的两个回环端口。"
             } catch {
                 guard !Task.isCancelled, self.desktopProcess === process else { return }
                 self.terminateClaudeProcesses()
@@ -868,7 +939,7 @@ final class SandboxSession {
             checks = withTargetChecks(
                 withDetectedProxyCheck(result.checks, expected: proxyAtStart)
             )
-            guard checks.allSatisfy(\.passed) else {
+            guard !checks.contains(where: \.blocksLaunch) else {
                 relay.pause()
                 phase = .networkPaused
                 networkEnabled = false
@@ -887,9 +958,12 @@ final class SandboxSession {
             networkEnabled = true
             phase = .running
             pauseReason = .none
+            let warningSuffix = checks.contains(where: { $0.isWarning && !$0.passed })
+                ? "出口核对仍有警告，但网络未中断。"
+                : ""
             message = automatically
-                ? "网络已自动恢复；代理配置未发生实质变化，Claude 路径与保存出口复检通过。"
-                : "网络已恢复；Claude 路径、断网保护和保存出口重新验证通过。"
+                ? "网络已自动恢复；代理配置未发生实质变化，Claude 路径和断网保护复检通过。\(warningSuffix)"
+                : "网络已恢复；Claude 路径和断网保护重新验证通过。\(warningSuffix)"
         } catch {
             relay.pause()
             networkEnabled = false
@@ -1009,7 +1083,7 @@ final class SandboxSession {
         checks = withTargetChecks(
             withDetectedProxyCheck(result.checks, expected: proxyAtStart)
         )
-        guard checks.allSatisfy(\.passed), result.relayReachable else {
+        guard !checks.contains(where: \.blocksLaunch), result.relayReachable else {
             pauseNetworkAutomatically(
                 reason: .networkChange(reason),
                 message: "网络稳定性复检未通过，沙箱已断网；Claude 进程仍保留，可修正代理后手动恢复。"
@@ -1025,11 +1099,14 @@ final class SandboxSession {
         networkEnabled = true
         phase = .running
         pauseReason = .none
+        let warningSuffix = checks.contains(where: { $0.isWarning && !$0.passed })
+            ? "；出口核对仍有警告，但网络未中断。"
+            : "。"
         message = waking
-            ? "系统唤醒后复检通过，中继保持可用；Claude 连接未被 Routekeeper 主动重启。"
+            ? "系统唤醒后复检通过，中继保持可用；Claude 连接未被 Routekeeper 主动重启\(warningSuffix)"
             : exitChanged
-                ? "网络事件复检通过；出口锚点已更新，Claude 连接未被中断。"
-                : "网络事件复检通过；代理配置和出口锚点未变，Claude 连接未被中断。"
+                ? "网络事件复检通过；出口锚点已更新，Claude 连接未被中断\(warningSuffix)"
+                : "网络事件复检通过；代理配置和出口锚点未变，Claude 连接未被中断\(warningSuffix)"
     }
 
     func endSession() async {
@@ -1069,6 +1146,7 @@ final class SandboxSession {
         sessionRoot = nil
         exchangePath = nil
         activeExecutable = nil
+        claudeCodeInstallation = nil
         desktopProcess = nil
         desktopAppRunningOutsideSandbox = false
         relayPort = nil
@@ -1094,7 +1172,9 @@ final class SandboxSession {
         purgeOwnedProfiles()
         configuration = IsolationConfiguration()
         preferences.removeObject(forKey: Self.configurationKey)
+        preferences.removeObject(forKey: ClaudeCodeDiscovery.manualPathPreferenceKey)
         persistedClaudeProfileAvailable = false
+        refreshInstalledApplications()
         phase = .ready
         message = "本地沙箱配置和会话副本已清空。"
         return true
@@ -1288,8 +1368,8 @@ final class SandboxSession {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        let locale = IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
-        let appleLanguage = IsolationSessionEnvironment.appleLanguageIdentifier(forLocale: locale)
+        let locale = IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
+        let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: configuration.languageIdentifier)
         let values: [String: Any] = [
             "AppleLocale": locale.replacingOccurrences(of: ".UTF-8", with: ""),
             "AppleLanguages": [appleLanguage]
@@ -1311,9 +1391,9 @@ final class SandboxSession {
         let processIDPath = layout.control.appendingPathComponent("sandbox.pid").path
         let processStartPath = layout.control.appendingPathComponent("sandbox.started").path
         let path = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
-        let locale = IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
+        let locale = IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
         let language = IsolationSessionEnvironment.languageIdentifier(forLocale: locale)
-        let appleLanguage = IsolationSessionEnvironment.appleLanguageIdentifier(forLocale: locale)
+        let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: configuration.languageIdentifier)
         let appleLocale = locale.replacingOccurrences(of: ".UTF-8", with: "")
         var exports = [
             "HOME=\(home.path)",
@@ -1493,9 +1573,14 @@ final class SandboxSession {
         )
     }
 
-    nonisolated static func desktopLocaleLaunchArguments(for timezoneIdentifier: String) -> [String] {
-        let locale = IsolationSessionEnvironment.localeIdentifier(for: timezoneIdentifier)
-        let appleLanguage = IsolationSessionEnvironment.appleLanguageIdentifier(forLocale: locale)
+    nonisolated static func desktopLocaleLaunchArguments(
+        for timezoneIdentifier: String,
+        languageIdentifier: String? = nil
+    ) -> [String] {
+        let language = languageIdentifier
+            ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezoneIdentifier)
+        let locale = IsolationSessionEnvironment.posixLocale(for: language)
+        let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: language)
         let appleLocale = locale.replacingOccurrences(of: ".UTF-8", with: "")
         return ["-AppleLanguages", "(\(appleLanguage))", "-AppleLocale", appleLocale]
     }
@@ -1509,9 +1594,9 @@ final class SandboxSession {
     ) -> [String: String] {
         let layout = paths.layout
         let runtimeHome = paths.runtimeHome
-        let locale = IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
+        let locale = IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
         let language = IsolationSessionEnvironment.languageIdentifier(forLocale: locale)
-        let appleLanguage = IsolationSessionEnvironment.appleLanguageIdentifier(forLocale: locale)
+        let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: configuration.languageIdentifier)
         let appleLocale = locale.replacingOccurrences(of: ".UTF-8", with: "")
         var values = [
             "HOME": runtimeHome.path,
@@ -1617,7 +1702,7 @@ final class SandboxSession {
     }
 
     private func persistConfiguration() {
-        guard phase.canChangeConfiguration else { return }
+        guard persistsConfiguration, phase.canChangeConfiguration else { return }
         var persisted = configuration
         persisted.upstream.password = ""
         if let data = try? JSONEncoder().encode(persisted) {
@@ -1896,7 +1981,7 @@ final class SandboxSession {
             let resultFile = paths.layout.temporary.appendingPathComponent("preflight-result")
             let claudeTraceFile = paths.layout.temporary.appendingPathComponent("claude-trace")
             let zoned = TimeZone(identifier: configuration.timezoneIdentifier)?.identifier ?? ""
-            let locale = IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
+            let locale = IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
             let language = IsolationSessionEnvironment.languageIdentifier(forLocale: locale)
             let expectedIPv4 = expectedExits.ipv4 ?? ""
             let expectedIPv6 = expectedExits.ipv6 ?? ""
@@ -1973,7 +2058,7 @@ final class SandboxSession {
                 decoding: errors.fileHandleForReading.readDataToEndOfFile().prefix(4_000),
                 as: UTF8.self
             )
-            let failure = process.terminationStatus == 0 && checks.allSatisfy(\.passed)
+            let failure = process.terminationStatus == 0 && !checks.contains(where: \.blocksLaunch)
                 ? ""
                 : "隔离自检未通过。\(stderrText.isEmpty ? "请检查下方各项。" : "系统拒绝了启动，技术信息见运行记录。")"
             let relayIPv4 = values
@@ -2014,9 +2099,9 @@ final class SandboxSession {
         paths: IsolationResolvedPaths,
         relayEnvironment: [String: String]
     ) -> [String: String] {
-        let locale = IsolationSessionEnvironment.localeIdentifier(for: configuration.timezoneIdentifier)
+        let locale = IsolationSessionEnvironment.posixLocale(for: configuration.languageIdentifier)
         let language = IsolationSessionEnvironment.languageIdentifier(forLocale: locale)
-        let appleLanguage = IsolationSessionEnvironment.appleLanguageIdentifier(forLocale: locale)
+        let appleLanguage = IsolationSessionEnvironment.appleLanguage(for: configuration.languageIdentifier)
         var values = [
             "HOME": paths.runtimeHome.path,
             "TMPDIR": paths.layout.temporary.path,
@@ -2111,11 +2196,14 @@ final class SandboxSession {
             } else {
                 resolvedDetail = detail
             }
+            // Exit matching is advisory; sandbox and fail-closed network boundaries remain mandatory.
+            let warning = id == "claude-exit-match" && !passed
             return IsolationCheck(
                 id: id,
                 title: title,
-                detail: passed ? resolvedDetail : "未通过：\(resolvedDetail)",
-                passed: passed
+                detail: passed ? resolvedDetail : warning ? "警告：\(resolvedDetail)" : "未通过：\(resolvedDetail)",
+                passed: passed,
+                isWarning: warning
             )
         }
     }

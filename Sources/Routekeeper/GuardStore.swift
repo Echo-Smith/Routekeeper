@@ -31,11 +31,13 @@ final class GuardStore {
             )
             epoch += 1
             snapshot = nil
+            evidenceNeedsReview = true
             notice = L("notice.settingsChanged")
             if let data = try? JSONEncoder().encode(settings) { preferences.set(data, forKey: "guard-settings-v1") }
         }
     }
     var snapshot: DiagnosticSnapshot?
+    var evidenceNeedsReview = false
     var activeFamilies: Set<IPFamily>?
     var checking = false
     var monitoring = false
@@ -62,7 +64,7 @@ final class GuardStore {
     var networkFilter = FilterController()
     var capture = CaptureController()
     var authentication = CredentialController()
-    var sandbox: SandboxSession
+    var sandbox: SandboxCoordinator
     var gatewayVerification: GatewayVerificationController
     var egressAudit: EgressAuditController
     var events: [GuardEvent] = []
@@ -85,7 +87,11 @@ final class GuardStore {
         didSet { revisionHandlers.forEach { $0() } }
     }
     var desktopInstalled: Bool { snapshot?.desktopPath != nil || desktopInstallation != nil }
-    var codeInstalled: Bool { ApplicationDiscovery.codePathsInstalled() }
+    var codeInstalled: Bool {
+        ClaudeCodeDiscovery.locate(
+            manualPath: preferences.string(forKey: ClaudeCodeDiscovery.manualPathPreferenceKey)
+        ) != nil
+    }
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var egressAutomationTask: Task<Void, Never>?
     @ObservationIgnored private var egressEventTask: Task<Void, Never>?
@@ -106,14 +112,14 @@ final class GuardStore {
     init(defaults: UserDefaults = .standard, watchNetwork: Bool = true, notificationsEnabled: Bool = true,
          gatewayVerification: GatewayVerificationController? = nil,
          egressAuditController: EgressAuditController? = nil,
-         sandbox: SandboxSession? = nil,
+         sandbox: SandboxCoordinator? = nil,
          credentialClearer: (() -> Bool)? = nil,
          networkFilterDisabler: (() async -> Error?)? = nil,
          runDiagnostic: @escaping @Sendable (GuardSettings) async -> DiagnosticSnapshot = { await Diagnostics.run(settings: $0) }) {
         preferences = defaults
         self.gatewayVerification = gatewayVerification ?? GatewayVerificationController(defaults: defaults)
         self.egressAudit = egressAuditController ?? EgressAuditController(defaults: defaults)
-        self.sandbox = sandbox ?? SandboxSession(preferences: defaults)
+        self.sandbox = sandbox ?? SandboxCoordinator(preferences: defaults)
         self.credentialClearer = credentialClearer
         self.networkFilterDisabler = networkFilterDisabler
         self.notificationsEnabled = notificationsEnabled
@@ -168,6 +174,15 @@ final class GuardStore {
     }
 
     var sandboxModeEnabled: Bool { settings.experimentalSandboxEnabled }
+
+    var canRunNetworkInspection: Bool {
+        !sandbox.anyActive && !sandbox.busy
+    }
+
+    var gatewayEvidenceReady: Bool {
+        settings.gatewayProtectionMode == .off
+            || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode)
+    }
     func refreshDesktopDiscovery() {
         desktopInstallation = ClaudeDesktopDiscovery.locate()
     }
@@ -176,20 +191,32 @@ final class GuardStore {
         if events.count > 60 { events.removeLast(events.count - 60) }
     }
     func check() async {
-        guard !settings.experimentalSandboxEnabled, !checking, !monitoring, !systemSleeping else { return }
+        guard canRunNetworkInspection else {
+            notice = L10n.resolvedEnglish
+                ? "End the active sandbox session before running a host network check."
+                : "请先结束当前沙箱会话，再进行本机网络体检。"
+            return
+        }
+        guard !checking, !monitoring, !systemSleeping else { return }
         checking = true
         let requestEpoch = epoch; let selected = settings
         let result = await diagnostics.run(selected)
         checking = false
         guard epoch == requestEpoch, selected == settings else { return }
         snapshot = result
+        evidenceNeedsReview = false
         activeFamilies = result.enabledFamilies
         notice = result.ready ? L("notice.checkPassed") : L("notice.checkFailed")
         log(result.ready ? L("notice.passedLog") : L("notice.failedLog"), attention: !result.ready)
     }
 
     func snapshotForEgressAudit(maxAge: TimeInterval = 45) async -> DiagnosticSnapshot? {
-        guard !settings.experimentalSandboxEnabled else { return nil }
+        guard canRunNetworkInspection else {
+            notice = L10n.resolvedEnglish
+                ? "End the active sandbox session before running a host network check."
+                : "请先结束当前沙箱会话，再进行本机网络检查。"
+            return nil
+        }
         if !monitoring {
             if let snapshot,
                Date().timeIntervalSince(snapshot.checkedAt) <= maxAge {
@@ -238,7 +265,7 @@ final class GuardStore {
     }
 
     private func runAutomaticEgressAudit(trigger: EgressAuditTrigger) async {
-        guard !settings.experimentalSandboxEnabled, automaticEgressAuditEnabled, !systemSleeping,
+        guard canRunNetworkInspection, automaticEgressAuditEnabled, !systemSleeping,
               !egressAudit.busy, !checking else { return }
         guard let snapshot = await snapshotForEgressAudit(maxAge: 45) else { return }
         let previousLevel = egressAudit.report?.assessment.level
@@ -262,10 +289,10 @@ final class GuardStore {
     }
 
     func autoAdoptExit() async {
-        guard !settings.experimentalSandboxEnabled else {
+        guard canRunNetworkInspection else {
             notice = L10n.resolvedEnglish
-                ? "Turn off experimental sandbox mode before changing ordinary network monitoring."
-                : "请先关闭实验性进程沙箱模式，再调整普通网络监控。"
+                ? "End the active sandbox session before changing the shared fixed exit."
+                : "请先结束当前沙箱会话，再调整共享固定出口。"
             return
         }
         guard !monitoring else {
@@ -298,13 +325,13 @@ final class GuardStore {
         guard settings.experimentalSandboxEnabled else {
             notice = L10n.resolvedEnglish
                 ? "Turn on sandbox mode before detecting its exit."
-                : "请先开启沙箱模式，再检测沙箱出口。"
+                : "请先开启实验性沙箱，再检测出口。"
             return false
         }
         guard !monitoring, !checking, !sandbox.phase.isActive else {
             notice = L10n.resolvedEnglish
                 ? "End the active sandbox session and wait for other checks before detecting an exit."
-                : "请先结束当前沙箱会话，并等待其他检查完成后再检测出口。"
+                : "请先结束当前实验性沙箱会话，并等待其他检查完成后再检测出口。"
             return false
         }
         guard let result = await freshExitSnapshot() else { return false }
@@ -325,19 +352,20 @@ final class GuardStore {
         }
         settings = updated
         snapshot = result
+        evidenceNeedsReview = false
         activeFamilies = result.enabledFamilies
         notice = L10n.resolvedEnglish
             ? "Detected and saved the sandbox exit. Preflight will verify Claude through the same relay."
-            : "已检测并保存沙箱出口；预检会用同一中继核对 Claude。"
+            : "已检测并保存实验性沙箱出口；预检会用同一中继核对 Claude。"
         log(notice)
         return true
     }
 
     func adoptObservedExit(family: IPFamily) async {
-        guard !settings.experimentalSandboxEnabled else {
+        guard canRunNetworkInspection else {
             notice = L10n.resolvedEnglish
-                ? "Turn off experimental sandbox mode before changing ordinary network monitoring."
-                : "请先关闭实验性进程沙箱模式，再调整普通网络监控。"
+                ? "End the active sandbox session before changing the shared fixed exit."
+                : "请先结束当前沙箱会话，再调整共享固定出口。"
             return
         }
         guard !monitoring else {
@@ -363,7 +391,7 @@ final class GuardStore {
             if settings.experimentalSandboxEnabled {
                 notice = L10n.resolvedEnglish
                     ? "Turn off experimental sandbox mode before starting ordinary monitoring."
-                    : "请先关闭“实验性进程沙箱”模式，再开启普通监控。"
+                    : "请先关闭“实验性沙箱”，再开启普通监控。"
             }
             return
         }
@@ -371,7 +399,7 @@ final class GuardStore {
                 || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) else {
             notice = L10n.resolvedEnglish
                 ? "Complete the current gateway checks before starting monitoring while gateway protection is selected."
-                : "已选择代理网关保护，请先在“网络体检 → 代理网关”完成当前网络下的检查。"
+                : "已选择代理网关保护，请先在“网络保护”中完成当前网络下的代理网关检查。"
             log(notice, attention: true)
             return
         }
@@ -381,6 +409,7 @@ final class GuardStore {
         checking = false
         guard epoch == requestEpoch, selected == settings else { return }
         snapshot = result
+        evidenceNeedsReview = false
         activeFamilies = result.enabledFamilies
         guard policy.arm(result, settings: settings) else { notice = L("notice.armBlocked"); log(notice, attention: true); return }
         monitoring = true; notice = ""; lastSignal = [:]
@@ -401,6 +430,7 @@ final class GuardStore {
                 let next = await self.diagnostics.run(selected)
                 guard !Task.isCancelled, self.monitoring, self.epoch == requestEpoch else { break }
                 self.snapshot = next
+                self.evidenceNeedsReview = false
                 self.activeFamilies = next.enabledFamilies
                 let before = self.policy.phase
                 self.policy.observe(next)
@@ -418,12 +448,12 @@ final class GuardStore {
         if sandboxModeActive {
             if sleeping { systemSleeping = true }
             if waking { systemSleeping = false }
-            sandbox.networkEnvironmentChanged(reason, sleeping: sleeping, waking: waking)
+            sandbox.environmentChanged(reason, sleeping: sleeping, waking: waking)
             log(
                 sleeping
                     ? (L10n.resolvedEnglish
                         ? "System sleep detected. Sandbox networking was closed immediately and will be revalidated after wake."
-                        : "检测到系统休眠，沙箱网络已立即关闭；唤醒后会等待稳定并自动复检。")
+                        : "检测到系统休眠，实验性沙箱网络已立即关闭；唤醒后会等待稳定并自动复检。")
                     : (L10n.resolvedEnglish
                         ? "Network notification received. Routekeeper is waiting for a stable sample and will keep the relay open when the effective configuration is unchanged."
                         : "收到网络状态通知，正在等待稳定采样；有效配置未变时会保留中继并避免中断 Claude。"),
@@ -441,6 +471,7 @@ final class GuardStore {
         epoch += 1
         let revision = epoch
         loop?.cancel(); revalidation?.cancel(); snapshot = nil
+        evidenceNeedsReview = true
         let wasArmed = policy.phase == .armed
         policy.trip(reason); notice = reason; log(reason, attention: true)
         if monitoring && wasArmed {
@@ -487,7 +518,7 @@ final class GuardStore {
     }
     private func freshExitSnapshot() async -> DiagnosticSnapshot? {
         guard !monitoring, !systemSleeping, !checking else {
-            notice = L10n.resolvedEnglish ? "Another network check is already running." : "已有网络检查正在运行，请稍后重试。"
+            notice = L10n.resolvedEnglish ? "Another network check is already running." : "已有网络体检正在运行，请稍后重试。"
             return nil
         }
         checking = true
@@ -497,6 +528,7 @@ final class GuardStore {
         checking = false
         guard epoch == requestEpoch, selected == settings else { return nil }
         snapshot = result
+        evidenceNeedsReview = false
         activeFamilies = result.enabledFamilies
         return result
     }
@@ -513,8 +545,7 @@ final class GuardStore {
         guard monitoring, policy.phase == .armed, let latest = snapshot,
               Date().timeIntervalSince(latest.checkedAt) < 15, latest.ready,
               settings.protectDesktop, let path = latest.desktopPath,
-              settings.gatewayProtectionMode == .off
-                || gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) else {
+              gatewayEvidenceReady else {
             notice = L10n.resolvedEnglish
                 ? "Pass the current gateway and self-check evidence before launching."
                 : "请先完成当前网络下的代理网关和自检，再启动桌面版。"
@@ -525,11 +556,11 @@ final class GuardStore {
         }
     }
 
-    func prepareSandbox() async {
+    func prepareSandbox(target: IsolationApplicationTarget) async {
         guard settings.experimentalSandboxEnabled else {
             notice = L10n.resolvedEnglish
                 ? "Turn on experimental sandbox mode first."
-                : "请先开启“实验性进程沙箱”模式。"
+                : "请先开启“实验性沙箱”。"
             return
         }
         var expectedExits = IsolationExpectedExits(
@@ -543,38 +574,45 @@ final class GuardStore {
                 ipv6: settings.target(for: .ipv6)
             )
         }
-        if settings.gatewayProtectionMode != .off
-            && !gatewayVerification.isFreshlyVerified(for: settings.gatewayProtectionMode) {
-            notice = L10n.resolvedEnglish
-                ? "Finish the current gateway checks before creating a sandbox session."
-                : "已选择代理网关保护，请先在“网络体检 → 代理网关”完成当前网络下的检查。"
-            return
+        let gatewayWarning = gatewayEvidenceReady
+            ? nil
+            : (L10n.resolvedEnglish
+                ? "Gateway verification is incomplete. The sandbox will still start, but review the warning and decide whether to continue."
+                : "代理网关检查尚未完成。沙箱仍可启动；请查看警告后自行决定是否继续。")
+        if let gatewayWarning {
+            notice = gatewayWarning
+            log(gatewayWarning, attention: true)
         }
         if monitoring { stop() }
-        await sandbox.prepare(expectedExits: expectedExits)
-        log(sandbox.statusTitle, attention: sandbox.phase == .failed)
+        await sandbox.prepare(target: target, expectedExits: expectedExits)
+        let session = sandbox.session(for: target)
+        if let gatewayWarning {
+            session.message += " \(gatewayWarning)"
+        }
+        log(session.message, attention: session.phase == .failed)
     }
 
-    func launchClaudeInSandbox() {
-        if sandbox.configuration.target == .claudeDesktop {
-            sandbox.launchClaudeDesktop()
+    func launchClaudeInSandbox(target: IsolationApplicationTarget) {
+        let session = sandbox.session(for: target)
+        if target == .claudeDesktop {
+            session.launchClaudeDesktop()
             log(
-                sandbox.claudeRunning
+                session.claudeRunning
                     ? (L10n.resolvedEnglish
                         ? "Requested an isolated launch of the official Claude Desktop app."
                         : "已请求启动隔离的官方 Claude Desktop。")
-                    : sandbox.message,
-                attention: !sandbox.claudeRunning
+                    : session.message,
+                attention: !session.claudeRunning
             )
             return
         }
         guard let token = authentication.launchToken() else {
-            sandbox.message = L10n.resolvedEnglish
+            session.message = L10n.resolvedEnglish
                 ? "Save a Claude Code sign-in token under Tools → Sign-in before launching the isolated session."
                 : "请先在“工具 → 登录凭证”中保存登录凭证，再启动隔离会话。"
             return
         }
-        sandbox.launchClaudeCode(token: token)
+        session.launchClaudeCode(token: token)
         log(
             L10n.resolvedEnglish
                 ? "Requested an isolated Claude Code launch in Terminal."
@@ -582,40 +620,68 @@ final class GuardStore {
         )
     }
 
+    func launchClaudeWebBrowser() async {
+        guard settings.experimentalSandboxEnabled else {
+            notice = L10n.resolvedEnglish
+                ? "Turn on experimental sandbox mode first."
+                : "请先开启“实验性沙箱”。"
+            return
+        }
+        let expectedExits = IsolationExpectedExits(
+            ipv4: settings.target(for: .ipv4),
+            ipv6: settings.target(for: .ipv6)
+        )
+        let launched = await sandbox.webBrowser.launch(
+            configuration: sandbox.sharedConfiguration,
+            expectedExits: expectedExits
+        )
+        if let warning = sandbox.webBrowser.pendingLaunchWarning {
+            notice = warning
+        }
+        log(
+            sandbox.webBrowser.message,
+            attention: !launched || sandbox.webBrowser.pendingLaunchWarning != nil
+        )
+    }
+
+    func confirmClaudeWebBrowserLaunch() async {
+        let launched = await sandbox.webBrowser.confirmPendingLaunch()
+        log(sandbox.webBrowser.message, attention: !launched)
+    }
+
     func launchFromAuthentication() {
         if settings.experimentalSandboxEnabled {
-            guard sandbox.phase == .running || sandbox.phase == .networkPaused else {
+            let session = sandbox.codeSession
+            guard session.phase == .running || session.phase == .networkPaused else {
                 notice = L10n.resolvedEnglish
                     ? "Create and verify an isolated session before launching Claude."
                     : "请先创建并验证隔离会话，再启动 Claude。"
                 return
             }
-            launchClaudeInSandbox()
+            launchClaudeInSandbox(target: .claudeCode)
         } else {
             authentication.launchClaudeCode()
         }
     }
 
     func pauseSandboxNetwork() {
-        sandbox.pauseNetwork()
+        sandbox.pauseAllNetworks()
         log(sandbox.statusTitle, attention: true)
     }
 
     func resumeSandboxNetwork() async {
-        await sandbox.resumeNetwork()
+        await sandbox.resumeAllNetworks()
         log(sandbox.statusTitle, attention: sandbox.phase == .networkPaused)
     }
 
     func endSandboxSession() async {
-        await sandbox.endSession()
+        await sandbox.endAllSessions()
         log(sandbox.statusTitle)
     }
 
     func prepareForTermination() async {
         stop()
-        if sandbox.phase.isActive {
-            await sandbox.endSession()
-        }
+        await sandbox.endAllSessions()
     }
 
     @discardableResult
@@ -670,6 +736,7 @@ final class GuardStore {
         automaticEgressAuditIntervalMinutes = 30
         policy = GuardPolicy()
         snapshot = nil
+        evidenceNeedsReview = false
         activeFamilies = nil
         monitoring = false
         checking = false
@@ -712,7 +779,7 @@ final class GuardStore {
         }
         notice = L10n.resolvedEnglish
             ? "Local settings and files were cleared, but the Keychain credential could not be removed. Check Keychain Access."
-            : "本地设置与文件已清空，但 Keychain 登录凭证未能删除。请检查“钥匙串访问”。"
+            : "本地设置与文件已清空，但登录凭证未能从 macOS 钥匙串删除。请检查“钥匙串访问”。"
         return false
     }
     func exportReport(redacted: Bool = false) {
@@ -753,14 +820,14 @@ final class GuardStore {
         let home = NSHomeDirectory()
         let sessionsRoot = sandbox.cleanupSessionsRoot
         let profilesRoot = sandbox.cleanupProfilesRoot
-        let currentSessionRoot = sandbox.sessionRoot
+        let currentSessionRoots = sandbox.currentSessionRoots
         Task {
             let plan = await Task.detached(priority: .userInitiated) {
                 CacheCleaner.scanWithLiveSafety(
                     home: home,
                     sessionsRoot: sessionsRoot,
                     profilesRoot: profilesRoot,
-                    currentSessionRoot: currentSessionRoot
+                    currentSessionRoots: currentSessionRoots
                 )
             }.value
             applyCleanupPlan(plan)
@@ -773,7 +840,12 @@ final class GuardStore {
         cleanupPlanRevision &+= 1
         cleanupSelection = Set(
             plan.targets
-                .filter { $0.exists && $0.fileCount > 0 && $0.isSelectable }
+                .filter {
+                    $0.exists
+                        && $0.fileCount > 0
+                        && $0.isSelectable
+                        && $0.scope != .pastSession
+                }
                 .map(\.id)
         )
     }
@@ -804,7 +876,7 @@ final class GuardStore {
         let home = NSHomeDirectory()
         let sessionsRoot = sandbox.cleanupSessionsRoot
         let profilesRoot = sandbox.cleanupProfilesRoot
-        let currentSessionRoot = sandbox.sessionRoot
+        let currentSessionRoots = sandbox.currentSessionRoots
         Task {
             var result = CleanupRunResult()
             if !selected.isEmpty {
@@ -813,7 +885,7 @@ final class GuardStore {
                         home: home,
                         sessionsRoot: sessionsRoot,
                         profilesRoot: profilesRoot,
-                        currentSessionRoot: currentSessionRoot
+                        currentSessionRoots: currentSessionRoots
                     )
                     let freshByPath = Dictionary(uniqueKeysWithValues: freshPlan.targets.map { ($0.id, $0) })
                     var outcome = CleanupRunResult()
@@ -869,7 +941,7 @@ final class GuardStore {
                         home: home,
                         sessionsRoot: sessionsRoot,
                         profilesRoot: profilesRoot,
-                        currentSessionRoot: currentSessionRoot
+                        currentSessionRoots: currentSessionRoots
                     )
                 }.value
             }

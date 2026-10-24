@@ -28,9 +28,6 @@ struct AppSettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Text(L("general.langNote"))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
                 Picker(L("general.appearance"), selection: $appearanceRaw) {
                     ForEach(AppAppearance.allCases, id: \.self) { appearance in
                         Text(appearance.title).tag(appearance.rawValue)
@@ -46,15 +43,6 @@ struct AppSettingsView: View {
                 .accessibilityIdentifier("settings-text-scale")
             } header: {
                 Text(text("通用", "General"))
-            } footer: {
-                Text(text(
-                    "语言、外观与文字大小立即生效；系统菜单需重启应用后更新。",
-                    "Language, appearance and text size apply immediately. System menus update after restarting the app."
-                ))
-                    .routekeeperFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section {
@@ -77,7 +65,6 @@ struct AppSettingsView: View {
         }
         .routekeeperFont(.body)
         .formStyle(.grouped)
-        .routekeeperScrollEdge()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(appearanceOverride)
         .id(store.languageRevision)
@@ -134,10 +121,18 @@ private struct LegalNoticeSheet: View {
                 }
                 .frame(maxWidth: 700, alignment: .leading)
                 .padding(.trailing, 8)
+                .padding(.bottom, 16)
             }
         }
         .padding(24)
-        .frame(minWidth: 680, idealWidth: 760, minHeight: 560, idealHeight: 650)
+        .frame(
+            minWidth: 680,
+            idealWidth: 760,
+            maxWidth: 920,
+            minHeight: 560,
+            idealHeight: 650,
+            maxHeight: 820
+        )
         .accessibilityIdentifier("legal-notice")
     }
 }

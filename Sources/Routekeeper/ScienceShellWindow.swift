@@ -136,7 +136,7 @@ final class ScienceShellWindowController: NSWindowController, NSWindowDelegate,
         configuration.userContentController.add(rules)
 
         webView = WKWebView(frame: .zero, configuration: configuration)
-        statusLabel = NSTextField(labelWithString: "正在连接本机 daemon…")
+        statusLabel = NSTextField(labelWithString: "正在连接本机服务…")
         progress = NSProgressIndicator()
 
         let window = NSWindow(
@@ -339,7 +339,7 @@ final class ScienceShellWindowController: NSWindowController, NSWindowDelegate,
     ) {
         guard let url = navigationAction.request.url,
               ScienceWebBoundary.isAllowedNavigation(url, ports: allowedPorts) else {
-            statusLabel.stringValue = "已阻止窗口访问 daemon 以外的网络地址"
+            statusLabel.stringValue = "已阻止窗口访问本机服务以外的网络地址"
             statusLabel.textColor = .systemOrange
             decisionHandler(.cancel)
             return
@@ -357,7 +357,7 @@ final class ScienceShellWindowController: NSWindowController, NSWindowDelegate,
            url.scheme != "about",
            url.scheme != "blob",
            !ScienceWebBoundary.isAllowedNavigation(url, ports: allowedPorts) {
-            statusLabel.stringValue = "已阻止响应来自 daemon 以外的地址"
+            statusLabel.stringValue = "已阻止响应来自本机服务以外的地址"
             statusLabel.textColor = .systemOrange
             decisionHandler(.cancel)
             return
@@ -383,13 +383,13 @@ final class ScienceShellWindowController: NSWindowController, NSWindowDelegate,
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         progress.isHidden = false
-        statusLabel.stringValue = "正在连接本机 daemon…"
+            statusLabel.stringValue = "正在连接本机服务…"
         statusLabel.textColor = .secondaryLabelColor
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         progress.isHidden = true
-        statusLabel.stringValue = "隔离窗口仅允许访问本机 daemon 端口"
+            statusLabel.stringValue = "隔离窗口仅允许访问本机服务端口"
         statusLabel.textColor = .secondaryLabelColor
         guard !didAutoSignIn else { return }
         let script = """
@@ -405,7 +405,7 @@ final class ScienceShellWindowController: NSWindowController, NSWindowDelegate,
         webView.evaluateJavaScript(script) { [weak self] value, _ in
             guard let self, (value as? Bool) == true else { return }
             self.didAutoSignIn = true
-            self.statusLabel.stringValue = "正在完成本机 daemon 登录…"
+            self.statusLabel.stringValue = "正在完成本机服务登录…"
         }
     }
 

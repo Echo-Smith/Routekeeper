@@ -113,13 +113,17 @@ final class PageOverflowControl: NSControl {
         border.lineWidth = 0.5
         border.stroke()
 
+        let symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 16,
+            weight: .semibold
+        ).applying(
+            NSImage.SymbolConfiguration(paletteColors: [.labelColor])
+        )
         if let image = NSImage(
             systemSymbolName: "ellipsis",
             accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 16, weight: .semibold)) {
+        )?.withSymbolConfiguration(symbolConfiguration) {
             let imageSize = image.size
-            image.isTemplate = true
-            NSColor.labelColor.set()
             image.draw(
                 in: NSRect(
                     x: (bounds.width - imageSize.width) / 2,

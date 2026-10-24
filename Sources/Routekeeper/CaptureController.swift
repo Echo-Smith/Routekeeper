@@ -10,7 +10,7 @@ final class CaptureController {
     var seconds = 15
     var busy = false
     var report = ""
-    var message = "会按目标地址自动选择当前路由网卡；开始记录时会请求管理员授权。"
+    var message = ""
     var valid: Bool { CapturePlan(interface: interface, destination: destination, seconds: seconds).valid }
 
     init() {
@@ -26,7 +26,7 @@ final class CaptureController {
         interface = NetworkEvidence.route(to: destination) ?? ""
         message = interface.isEmpty
             ? "无法识别当前网络路径；请检查目标地址和代理状态。"
-            : "已自动识别当前网络路径：\(interface) → \(destination)。"
+            : ""
     }
 
     func start() {

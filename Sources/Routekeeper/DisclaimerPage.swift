@@ -1,5 +1,6 @@
-import SwiftUI
+import AppKit
 import GuardCore
+import SwiftUI
 
 enum DisclaimerDocument {
     static let currentVersion = "2026-10-21.4"
@@ -38,6 +39,7 @@ struct DisclaimerConsentSheet: View {
                 }
                 .frame(maxWidth: 700, alignment: .leading)
                 .padding(.horizontal, 12)
+                .padding(.bottom, 16)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .padding(20)
@@ -108,7 +110,7 @@ struct DisclaimerBody: View {
         return [
             .init(
                 title: "一、软件性质",
-                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。Claude Desktop 的 Chat 模式是应用内网页工作区，Code 模式使用 Claude Code；沙箱把官方应用及其 helper 进程视为同一个应用边界。沙箱强制的是流量路径，不虚拟化主机网络元数据：受限进程仍可能读取网卡名称、地址、路由和 DNS 解析器配置，但局域网与公网直连会被拒绝。检测结果可能不完整，需要结合实际网络环境理解。"
+                body: "Routekeeper 是一款运行在本机的网络检查与监控辅助工具，不是杀毒软件、防火墙、网络匿名保证，也不是 Anthropic 或 Claude 的官方产品。Claude Desktop 的 Chat 模式是应用内网页工作区，Code 模式使用 Claude Code；沙箱把官方应用及其辅助进程视为同一个应用边界。沙箱强制的是流量路径，不虚拟化主机网络元数据：受限进程仍可能读取网卡名称、地址、路由和 DNS 解析器配置，但局域网与公网直连会被拒绝。检测结果可能不完整，需要结合实际网络环境理解。"
             ),
             .init(
                 title: "二、使用限制",
@@ -131,7 +133,7 @@ struct DisclaimerBody: View {
                 body: "在适用法律允许的最大范围内，对于因使用或无法使用本软件而产生的间接、附带、特殊、后果性或惩罚性损失，包括数据、账号访问、网络连接、利润或商业机会损失，开发者不承担责任。依法不能排除的权利不受本段影响。"
             ),
             .init(
-                title: "七、数据搜集与隐私",
+                title: "七、数据收集与隐私",
                 body: "报告和历史记录保存在本机。检查过程会请求 ipify、ipinfo.io、STUN、DNS 服务及 claude.ai，这些服务能够看到当前的公网出口 IP。可选的第三方 IP 情报查询默认关闭，只有你主动开启后才会使用。本软件不会自动上传已保存的报告。Claude Code 登录凭证保存在 macOS 系统钥匙串中，不会写入检测报告。若你启用 Claude Desktop 持久登录，Cookie 和本地 Claude 数据会保存在 Routekeeper 专属的应用支持目录中，直到你主动清除该配置或清空本地信息。"
             ),
             .init(
@@ -158,7 +160,6 @@ struct DisclaimerBody: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -175,7 +176,7 @@ struct DisclaimerScopeNotice: View {
             JustifiedText(
                 L10n.resolvedEnglish
                     ? "Routekeeper helps users manage a Claude identity they lawfully hold, verify this Mac’s network egress, and inspect the Claude client environment. It must not be used to violate Anthropic’s Terms of Service or applicable law. Local settings do not change Anthropic’s server-side records and do not guarantee anonymity, account availability, or server-side regional status."
-                    : "Routekeeper用于帮助用户管理本人合法持有的Claude身份，并核验本机网络出口与Claude客户端环境。禁止用于违反Anthropic服务条款或适用法律的行为。本地设置不会更改Anthropic服务端记录，不保证匿名、账号可用性或服务端地区状态。"
+                    : "Routekeeper 用于帮助用户管理本人合法持有的 Claude 身份，并核验本机网络出口与 Claude 客户端环境。禁止用于违反 Anthropic 服务条款或适用法律的行为。本地设置不会更改 Anthropic 服务端记录，不保证匿名、账号可用性或服务端地区状态。"
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,20 +185,25 @@ struct DisclaimerScopeNotice: View {
 
 private struct JustifiedText: NSViewRepresentable {
     let content: String
+    @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
 
     init(_ content: String) {
         self.content = content
     }
 
     private var font: NSFont {
-        NSFont.preferredFont(forTextStyle: .callout)
+        let base = NSFont.preferredFont(forTextStyle: .callout)
+        let scale = AppTextScale(rawValue: textScaleRaw) ?? .standard
+        return NSFont.systemFont(ofSize: base.pointSize * scale.multiplier)
     }
 
     private var attributedContent: NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .natural
+        paragraph.alignment = .justified
+        paragraph.baseWritingDirection = .natural
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineSpacing = 3
+        paragraph.hyphenationFactor = 0
         return NSAttributedString(
             string: content,
             attributes: [
@@ -208,41 +214,51 @@ private struct JustifiedText: NSViewRepresentable {
         )
     }
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField(wrappingLabelWithString: "")
-        textField.isEditable = false
-        textField.isSelectable = true
-        textField.isBezeled = false
-        textField.drawsBackground = false
-        textField.maximumNumberOfLines = 0
-        textField.lineBreakMode = .byWordWrapping
-        textField.focusRingType = .none
-        textField.cell?.wraps = true
-        textField.cell?.usesSingleLineMode = false
-        textField.cell?.isScrollable = false
-        textField.cell?.truncatesLastVisibleLine = false
-        textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        textField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return textField
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView(frame: .zero)
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.importsGraphics = false
+        textView.focusRingType = .none
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        return textView
     }
 
-    func updateNSView(_ textField: NSTextField, context: Context) {
-        textField.attributedStringValue = attributedContent
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        textView.textStorage?.setAttributedString(attributedContent)
+        textView.textContainer?.containerSize = NSSize(
+            width: max(textView.bounds.width, 1),
+            height: .greatestFiniteMagnitude
+        )
+        textView.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView: NSTextField,
+        nsView: NSTextView,
         context: Context
     ) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else {
             return nil
         }
-        nsView.preferredMaxLayoutWidth = width
+        nsView.textContainer?.containerSize = NSSize(
+            width: width,
+            height: .greatestFiniteMagnitude
+        )
         let bounds = attributedContent.boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
-        return CGSize(width: width, height: ceil(bounds.height) + 2)
+        return CGSize(width: width, height: ceil(bounds.height) + 6)
     }
 }

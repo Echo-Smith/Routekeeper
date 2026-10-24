@@ -34,11 +34,18 @@ public enum IsolationUpstreamProtocol: String, Codable, CaseIterable, Sendable {
     }
 }
 
-public enum IsolationApplicationTarget: String, Codable, CaseIterable, Sendable {
+public enum IsolationApplicationTarget: String, Codable, CaseIterable, Hashable, Sendable {
     case claudeCode
     case claudeDesktop
 
     public var title: String {
+        switch self {
+        case .claudeCode: return "Claude Code"
+        case .claudeDesktop: return "Claude Desktop"
+        }
+    }
+
+    public var exchangeDirectoryName: String {
         switch self {
         case .claudeCode: return "Claude Code"
         case .claudeDesktop: return "Claude Desktop"
@@ -202,32 +209,125 @@ public struct IsolationExpectedExits: Equatable, Sendable {
 
 public enum IsolationSessionEnvironment {
     public static func localeIdentifier(for timezoneIdentifier: String) -> String {
+        posixLocale(for: defaultLanguageIdentifier(for: timezoneIdentifier))
+    }
+
+    public static func defaultLanguageIdentifier(for timezoneIdentifier: String) -> String {
         switch timezoneIdentifier {
         case "Asia/Shanghai", "Asia/Chongqing", "Asia/Harbin":
-            return "zh_CN.UTF-8"
+            return "zh-Hans"
         case "Asia/Hong_Kong":
-            return "zh_HK.UTF-8"
+            return "zh-Hant-HK"
         case "Asia/Taipei":
-            return "zh_TW.UTF-8"
+            return "zh-Hant"
         case "Asia/Tokyo":
-            return "ja_JP.UTF-8"
+            return "ja-JP"
         case "Asia/Seoul":
-            return "ko_KR.UTF-8"
+            return "ko-KR"
         case "Europe/London":
-            return "en_GB.UTF-8"
+            return "en-GB"
         case "Europe/Paris":
-            return "fr_FR.UTF-8"
+            return "fr-FR"
         case "Europe/Berlin":
-            return "de_DE.UTF-8"
+            return "de-DE"
         case "Australia/Sydney":
-            return "en_AU.UTF-8"
+            return "en-AU"
         default:
-            return "en_US.UTF-8"
+            return "en-US"
         }
+    }
+
+    public static func normalizedLanguageIdentifier(_ value: String) -> String? {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+        guard !normalized.isEmpty, normalized.count <= 35 else { return nil }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-"))
+        guard normalized.unicodeScalars.allSatisfy(allowed.contains),
+              let primary = normalized.split(separator: "-").first,
+              (2...3).contains(primary.count) else {
+            return nil
+        }
+        let components = normalized.split(separator: "-")
+        let canonical = components.enumerated().map { index, component -> String in
+            let value = String(component)
+            if index == 0 { return value.lowercased() }
+            if value.count == 4, value.allSatisfy(\.isLetter) {
+                return value.prefix(1).uppercased() + value.dropFirst().lowercased()
+            }
+            if (value.count == 2 || value.count == 3),
+               value.allSatisfy(\.isNumber) || value.allSatisfy(\.isLetter) {
+                return value.uppercased()
+            }
+            return value.lowercased()
+        }.joined(separator: "-")
+        return canonical
+    }
+
+    public static func posixLocale(for languageIdentifier: String) -> String {
+        let language = normalizedLanguageIdentifier(languageIdentifier) ?? "en-US"
+        if language == "zh-Hans" { return "zh_CN.UTF-8" }
+        if language == "zh-Hant-HK" { return "zh_HK.UTF-8" }
+        if language == "zh-Hant" { return "zh_TW.UTF-8" }
+        let components = language.split(separator: "-").map(String.init)
+        let primary = components[0].lowercased()
+        let explicitRegion = components.dropFirst().first {
+            ($0.count == 2 && $0.allSatisfy(\.isLetter))
+                || ($0.count == 3 && $0.allSatisfy(\.isNumber))
+        }
+        let region = explicitRegion?.uppercased()
+            ?? defaultRegion(for: primary, components: components)
+        return "\(primary)_\(region).UTF-8"
+    }
+
+    public static func appleLanguage(for languageIdentifier: String) -> String {
+        normalizedLanguageIdentifier(languageIdentifier) ?? "en-US"
+    }
+
+    public static func acceptLanguage(for languageIdentifier: String) -> String {
+        let language = appleLanguage(for: languageIdentifier)
+        let primary = language.split(separator: "-").first.map(String.init) ?? language
+        return primary == language ? language : "\(language),\(primary)"
     }
 
     public static func languageIdentifier(forLocale locale: String) -> String {
         String(locale.split(separator: "_").first ?? "en")
+    }
+
+    private static func defaultRegion(for primary: String, components: [String]) -> String {
+        switch primary {
+        case "zh":
+            return components.contains("Hant") ? "TW" : "CN"
+        case "en": return "US"
+        case "ja": return "JP"
+        case "ko": return "KR"
+        case "fr": return "FR"
+        case "de": return "DE"
+        case "es": return "ES"
+        case "pt": return "PT"
+        case "it": return "IT"
+        case "nl": return "NL"
+        case "sv": return "SE"
+        case "da": return "DK"
+        case "fi": return "FI"
+        case "nb": return "NO"
+        case "pl": return "PL"
+        case "ru": return "RU"
+        case "uk": return "UA"
+        case "tr": return "TR"
+        case "ar": return "SA"
+        case "he": return "IL"
+        case "hi": return "IN"
+        case "th": return "TH"
+        case "vi": return "VN"
+        case "id": return "ID"
+        case "ms": return "MY"
+        case "cs": return "CZ"
+        case "el": return "GR"
+        case "hu": return "HU"
+        case "ro": return "RO"
+        default: return "US"
+        }
     }
 
     public static func appleLanguageIdentifier(forLocale locale: String) -> String {
@@ -249,6 +349,7 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
     public var projectPath: String
     public var exchangePath: String
     public var timezoneIdentifier: String
+    public var languageIdentifier: String
     public var upstream: IsolationUpstream
     public var target: IsolationApplicationTarget
     public var persistClaudeLogin: Bool
@@ -257,6 +358,7 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
         projectPath: String = "",
         exchangePath: String = "",
         timezoneIdentifier: String = TimeZone.current.identifier,
+        languageIdentifier: String? = nil,
         upstream: IsolationUpstream = IsolationUpstream(),
         target: IsolationApplicationTarget = .claudeCode,
         persistClaudeLogin: Bool = false
@@ -264,21 +366,27 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
         self.projectPath = projectPath
         self.exchangePath = exchangePath
         self.timezoneIdentifier = timezoneIdentifier
+        self.languageIdentifier = languageIdentifier
+            ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezoneIdentifier)
         self.upstream = upstream
         self.target = target
         self.persistClaudeLogin = persistClaudeLogin
     }
 
     enum CodingKeys: String, CodingKey {
-        case projectPath, exchangePath, timezoneIdentifier, upstream, target, persistClaudeLogin
+        case projectPath, exchangePath, timezoneIdentifier, languageIdentifier,
+             upstream, target, persistClaudeLogin
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         projectPath = try container.decodeIfPresent(String.self, forKey: .projectPath) ?? ""
         exchangePath = try container.decodeIfPresent(String.self, forKey: .exchangePath) ?? ""
-        timezoneIdentifier = try container.decodeIfPresent(String.self, forKey: .timezoneIdentifier)
+        let timezone = try container.decodeIfPresent(String.self, forKey: .timezoneIdentifier)
             ?? TimeZone.current.identifier
+        timezoneIdentifier = timezone
+        languageIdentifier = try container.decodeIfPresent(String.self, forKey: .languageIdentifier)
+            ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezone)
         upstream = try container.decodeIfPresent(IsolationUpstream.self, forKey: .upstream)
             ?? IsolationUpstream()
         target = try container.decodeIfPresent(IsolationApplicationTarget.self, forKey: .target)
@@ -292,6 +400,7 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
         try container.encode(projectPath, forKey: .projectPath)
         try container.encode(exchangePath, forKey: .exchangePath)
         try container.encode(timezoneIdentifier, forKey: .timezoneIdentifier)
+        try container.encode(languageIdentifier, forKey: .languageIdentifier)
         try container.encode(upstream, forKey: .upstream)
         try container.encode(target, forKey: .target)
         try container.encode(persistClaudeLogin, forKey: .persistClaudeLogin)
@@ -305,6 +414,116 @@ public struct IsolationConfiguration: Codable, Equatable, Sendable {
 
     public var hasValidTimezone: Bool {
         TimeZone(identifier: timezoneIdentifier) != nil
+    }
+
+    public var hasValidLanguage: Bool {
+        IsolationSessionEnvironment.normalizedLanguageIdentifier(languageIdentifier) != nil
+    }
+}
+
+public struct SandboxSharedConfiguration: Codable, Equatable, Sendable {
+    public var projectPath: String
+    public var exchangePath: String
+    public var timezoneIdentifier: String
+    public var languageIdentifier: String
+    public var upstream: IsolationUpstream
+    public var enabledTargets: Set<IsolationApplicationTarget>
+    public var persistClaudeLogin: Bool
+
+    public init(
+        projectPath: String = "",
+        exchangePath: String = "",
+        timezoneIdentifier: String = TimeZone.current.identifier,
+        languageIdentifier: String? = nil,
+        upstream: IsolationUpstream = IsolationUpstream(),
+        enabledTargets: Set<IsolationApplicationTarget> = [.claudeCode, .claudeDesktop],
+        persistClaudeLogin: Bool = false
+    ) {
+        self.projectPath = projectPath
+        self.exchangePath = exchangePath
+        self.timezoneIdentifier = timezoneIdentifier
+        self.languageIdentifier = languageIdentifier
+            ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezoneIdentifier)
+        self.upstream = upstream
+        self.enabledTargets = enabledTargets
+        self.persistClaudeLogin = persistClaudeLogin
+    }
+
+    public init(legacy: IsolationConfiguration) {
+        projectPath = legacy.projectPath
+        exchangePath = legacy.exchangePath
+        timezoneIdentifier = legacy.timezoneIdentifier
+        languageIdentifier = legacy.languageIdentifier
+        upstream = legacy.upstream
+        enabledTargets = [legacy.target]
+        persistClaudeLogin = legacy.persistClaudeLogin
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case projectPath, exchangePath, timezoneIdentifier, languageIdentifier,
+             upstream, enabledTargets, persistClaudeLogin
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectPath = try container.decodeIfPresent(String.self, forKey: .projectPath) ?? ""
+        exchangePath = try container.decodeIfPresent(String.self, forKey: .exchangePath) ?? ""
+        let timezone = try container.decodeIfPresent(String.self, forKey: .timezoneIdentifier)
+            ?? TimeZone.current.identifier
+        timezoneIdentifier = timezone
+        languageIdentifier = try container.decodeIfPresent(String.self, forKey: .languageIdentifier)
+            ?? IsolationSessionEnvironment.defaultLanguageIdentifier(for: timezone)
+        upstream = try container.decodeIfPresent(IsolationUpstream.self, forKey: .upstream)
+            ?? IsolationUpstream()
+        enabledTargets = try container.decodeIfPresent(
+            Set<IsolationApplicationTarget>.self,
+            forKey: .enabledTargets
+        ) ?? [.claudeCode, .claudeDesktop]
+        persistClaudeLogin = try container.decodeIfPresent(Bool.self, forKey: .persistClaudeLogin)
+            ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectPath, forKey: .projectPath)
+        try container.encode(exchangePath, forKey: .exchangePath)
+        try container.encode(timezoneIdentifier, forKey: .timezoneIdentifier)
+        try container.encode(languageIdentifier, forKey: .languageIdentifier)
+        try container.encode(upstream, forKey: .upstream)
+        try container.encode(enabledTargets, forKey: .enabledTargets)
+        try container.encode(persistClaudeLogin, forKey: .persistClaudeLogin)
+    }
+
+    public func isEnabled(_ target: IsolationApplicationTarget) -> Bool {
+        enabledTargets.contains(target)
+    }
+
+    public var hasValidTimezone: Bool {
+        TimeZone(identifier: timezoneIdentifier) != nil
+    }
+
+    public var hasValidLanguage: Bool {
+        IsolationSessionEnvironment.normalizedLanguageIdentifier(languageIdentifier) != nil
+    }
+
+    public func targetExchangePath(for target: IsolationApplicationTarget) -> String {
+        let trimmed = exchangePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return URL(fileURLWithPath: trimmed, isDirectory: true)
+            .appendingPathComponent(target.exchangeDirectoryName, isDirectory: true)
+            .path
+    }
+
+    public func configuration(for target: IsolationApplicationTarget) -> IsolationConfiguration {
+        IsolationConfiguration(
+            projectPath: projectPath,
+            exchangePath: targetExchangePath(for: target),
+            timezoneIdentifier: timezoneIdentifier,
+            languageIdentifier: languageIdentifier,
+            upstream: upstream,
+            target: target,
+            persistClaudeLogin: persistClaudeLogin
+        )
     }
 }
 
@@ -367,6 +586,7 @@ public enum IsolationValidationError: Error, LocalizedError, Equatable, Sendable
     case pathsOverlap
     case sessionRootOutsideApplicationSupport
     case invalidTimezone
+    case invalidLanguage
     case invalidUpstream
 
     public var errorDescription: String? {
@@ -385,6 +605,8 @@ public enum IsolationValidationError: Error, LocalizedError, Equatable, Sendable
             return "沙箱会话目录不在 Routekeeper 的应用支持目录中，已拒绝启动。"
         case .invalidTimezone:
             return "所选时区无效。"
+        case .invalidLanguage:
+            return "所选会话语言格式无效，请使用 en-US、zh-Hans、ja-JP 这类语言标识。"
         case .invalidUpstream:
             return "本地代理地址无效。第一版只接受本机 127.0.0.1、::1 或 localhost。"
         }
@@ -405,6 +627,7 @@ public enum IsolationPathValidator {
         }
         guard !exchangeText.isEmpty else { throw IsolationValidationError.missingExchange }
         guard configuration.hasValidTimezone else { throw IsolationValidationError.invalidTimezone }
+        guard configuration.hasValidLanguage else { throw IsolationValidationError.invalidLanguage }
         guard configuration.upstream.isValid else { throw IsolationValidationError.invalidUpstream }
 
         let project = projectText.isEmpty
@@ -690,12 +913,24 @@ public struct IsolationCheck: Identifiable, Equatable, Sendable {
     public var title: String
     public var detail: String
     public var passed: Bool
+    public var isWarning: Bool
 
-    public init(id: String, title: String, detail: String, passed: Bool) {
+    public init(
+        id: String,
+        title: String,
+        detail: String,
+        passed: Bool,
+        isWarning: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.detail = detail
         self.passed = passed
+        self.isWarning = isWarning
+    }
+
+    public var blocksLaunch: Bool {
+        !passed && !isWarning
     }
 }
 

@@ -132,6 +132,8 @@ public struct DiagnosticSnapshot: Codable, Sendable {
     public var codePaths: [String]
     public var familyExits: [ObservedExit] = []
     public var enabledFamilies: Set<IPFamily> = []
+    public var claudeProcessNetwork: ClaudeProcessNetworkSummary? = nil
+    public var codeEnvironment: ClaudeCodeEnvironmentSummary? = nil
     public var ready: Bool {
         guard settings.validInterval, settings.hasSelection,
               let exit = proxyIP, exit == tunnelIP,
