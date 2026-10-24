@@ -25,24 +25,33 @@ struct AppSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker(L("general.language"), selection: languageBinding) {
+                Picker(selection: languageBinding) {
                     ForEach(AppLanguage.allCases, id: \.self) { language in
                         Text(language.title).tag(language)
                     }
+                } label: {
+                    Label(L("general.language"), systemImage: "globe")
                 }
                 .pickerStyle(.menu)
-                Picker(L("general.appearance"), selection: $appearanceRaw) {
+                .labelStyle(.titleAndIcon)
+                Picker(selection: $appearanceRaw) {
                     ForEach(AppAppearance.allCases, id: \.self) { appearance in
                         Text(appearance.title).tag(appearance.rawValue)
                     }
+                } label: {
+                    Label(L("general.appearance"), systemImage: "circle.lefthalf.filled")
                 }
                 .pickerStyle(.menu)
-                Picker(text("文字大小", "Text size"), selection: $textScaleRaw) {
+                .labelStyle(.titleAndIcon)
+                Picker(selection: $textScaleRaw) {
                     ForEach(AppTextScale.allCases) { scale in
                         Text(scale.title).tag(scale.rawValue)
                     }
+                } label: {
+                    Label(text("文字大小", "Text size"), systemImage: "textformat.abc")
                 }
                 .pickerStyle(.menu)
+                .labelStyle(.titleAndIcon)
                 .accessibilityIdentifier("settings-text-scale")
                 LabeledContent {
                     HStack(spacing: 10) {
