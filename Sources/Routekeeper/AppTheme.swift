@@ -79,8 +79,9 @@ private struct AppSurfaceModifier: ViewModifier {
             .overlay {
                 if tone != .inset {
                     shape.strokeBorder(
-                        Color(nsColor: .separatorColor)
-                            .opacity(colorScheme == .dark ? 0.46 : 0.58),
+                        colorScheme == .dark
+                            ? Color(nsColor: .separatorColor).opacity(0.46)
+                            : Color(nsColor: .tertiaryLabelColor).opacity(0.55),
                         lineWidth: 0.5
                     )
                 }
