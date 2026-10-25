@@ -48,7 +48,17 @@ struct AppSettingsView: View {
                         Text(scale.title).tag(scale.rawValue)
                     }
                 } label: {
-                    Label(text("文字大小", "Text size"), systemImage: "textformat.abc")
+                    Label {
+                        Text(text("文字大小", "Text size"))
+                    } icon: {
+                        HStack(alignment: .firstTextBaseline, spacing: 0) {
+                            Text("文")
+                            Text("A")
+                        }
+                        .font(.system(size: 10.5, weight: .medium))
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                    }
                 }
                 .pickerStyle(.menu)
                 .labelStyle(.titleAndIcon)
