@@ -52,6 +52,7 @@ final class GuardCoreTests: XCTestCase {
         let past = sessions.appendingPathComponent("PAST-\(UUID().uuidString)", isDirectory: true)
         let unowned = sessions.appendingPathComponent("UNOWNED-\(UUID().uuidString)", isDirectory: true)
         let profile = profiles.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
+        let chrome = profiles.appendingPathComponent("ClaudeWeb", isDirectory: true)
         let fm = FileManager.default
 
         for session in [current, past] {
@@ -71,6 +72,11 @@ final class GuardCoreTests: XCTestCase {
         let profileCache = profile.appendingPathComponent("Library/Application Support/Claude/GPUCache", isDirectory: true)
         try fm.createDirectory(at: profileCache, withIntermediateDirectories: true)
         try Data("profile".utf8).write(to: profileCache.appendingPathComponent("gpu.bin"))
+        try fm.createDirectory(at: chrome, withIntermediateDirectories: true)
+        try Data("owned\n".utf8).write(to: chrome.appendingPathComponent(".routekeeper-profile"))
+        try Data("chrome-profile".utf8).write(
+            to: chrome.appendingPathComponent("ChromeProfileData")
+        )
 
         let plan = CacheCleaner.scan(
             home: home.path,
@@ -81,6 +87,7 @@ final class GuardCoreTests: XCTestCase {
         XCTAssertTrue(plan.targets.contains { $0.scope == .currentSession && $0.path.hasPrefix(current.path) && $0.sizeBytes == 7 })
         XCTAssertTrue(plan.targets.contains { $0.scope == .pastSession && $0.path.hasPrefix(past.path) && $0.sizeBytes == 7 })
         XCTAssertTrue(plan.targets.contains { $0.scope == .persistentProfile && $0.path.hasPrefix(profile.path) && $0.sizeBytes == 7 })
+        XCTAssertTrue(plan.targets.contains { $0.scope == .chromeProfile && $0.path == chrome.path })
         XCTAssertFalse(plan.targets.contains { $0.path.hasPrefix(unowned.path) })
         XCTAssertTrue(plan.warnings.contains { $0.contains("没有 Routekeeper 会话标记") })
     }
@@ -163,6 +170,39 @@ final class GuardCoreTests: XCTestCase {
         XCTAssertEqual(CacheCleaner.blocker(for: desktop, safety: unavailable), .processInspectionUnavailable)
         XCTAssertEqual(CacheCleaner.blocker(for: sandbox, safety: unavailable), .processInspectionUnavailable)
     }
+
+    func testChromeProfileCleanupIsBlockedWhileDedicatedBrowserRuns() {
+        let profile = CleanupTarget(
+            path: "/tmp/Routekeeper/Profiles/ClaudeWeb",
+            labelZh: "Chrome",
+            labelEn: "Chrome",
+            kindZh: "profile",
+            kindEn: "profile",
+            scope: .chromeProfile,
+            owningRoot: "/tmp/Routekeeper/Profiles/ClaudeWeb"
+        )
+        let running = CleanupSafetyContext(
+            processInspectionAvailable: true,
+            chromeProfileRunning: true
+        )
+        XCTAssertEqual(CacheCleaner.blocker(for: profile, safety: running), .browserRunning)
+
+        let unavailable = CleanupSafetyContext(
+            processInspectionAvailable: true,
+            chromeProfileInspectionAvailable: false
+        )
+        XCTAssertEqual(
+            CacheCleaner.blocker(for: profile, safety: unavailable),
+            .processInspectionUnavailable
+        )
+        XCTAssertNil(
+            CacheCleaner.blocker(
+                for: profile,
+                safety: CleanupSafetyContext(processInspectionAvailable: true)
+            )
+        )
+    }
+
     func testCleanerDetectsRecordedRunningSession() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cleaner-running-\(UUID().uuidString)", isDirectory: true)

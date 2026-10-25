@@ -12,7 +12,6 @@ struct SandboxPage: View {
     @State private var showProxySheet = false
     @State private var showBoundarySheet = false
     @State private var disableConfirmationStep: SandboxDisableConfirmationStep?
-    @State private var showBrowserProfileResetConfirmation = false
     @State private var expandedChecks: Set<IsolationApplicationTarget> = []
     @State private var claudeLoginLink = ""
     @State private var handoffPreview: HandoffActionItem?
@@ -114,24 +113,6 @@ struct SandboxPage: View {
                     }
                 }
             )
-        }
-        .confirmationDialog(
-            text("清除 Chrome 配置？", "Clear the Chrome profile?"),
-            isPresented: $showBrowserProfileResetConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button(text("清除 Chrome 配置", "Clear Chrome profile"), role: .destructive) {
-                Task {
-                    _ = await sandbox.webBrowser.clearProfileData()
-                    store.log(sandbox.webBrowser.message, attention: sandbox.webBrowser.phase == .failed)
-                }
-            }
-            Button(text("取消", "Cancel"), role: .cancel) {}
-        } message: {
-            Text(text(
-                "会删除 Routekeeper 专用 Chrome 配置中的 Cookie、登录状态、缓存和下载目录，不会影响宿主 Chrome。",
-                "This removes cookies, sign-in state, cache and downloads from Routekeeper's dedicated Chrome profile. Your host Chrome profile is not affected."
-            ))
         }
         .confirmationDialog(
             text("出口检查未确认", "Exit check needs attention"),
@@ -1762,16 +1743,6 @@ struct SandboxPage: View {
             }))
         }
         if !actionableSessions.isEmpty || hasBrowserNetworkAction {
-            result.append(.separator)
-        }
-        if browser.profileAvailable, !browser.phase.isRunning {
-            result.append(.action(PageOverflowAction(
-                title: text("清除 Chrome 配置…", "Clear Chrome profile…"),
-                systemImage: "trash",
-                isDestructive: true
-            ) {
-                showBrowserProfileResetConfirmation = true
-            }))
             result.append(.separator)
         }
         result.append(.action(PageOverflowAction(

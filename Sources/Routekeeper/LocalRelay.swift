@@ -77,7 +77,31 @@ final class LocalRelay: @unchecked Sendable {
     }
 
     func pause() {
-        stop(preservePort: true)
+        let sockets: [Int32] = lock.withLock {
+            generation += 1
+            isRunning = false
+            let values = [listener] + Array(activeSockets)
+            listener = -1
+            activeSockets.removeAll()
+            return values.filter { $0 >= 0 }
+        }
+        for descriptor in sockets {
+            shutdown(descriptor, SHUT_RDWR)
+            close(descriptor)
+        }
+        // Closing a listening socket can leave the port in TIME_WAIT. Only a
+        // successful rebind proves that pause actually removed the entry point.
+        for _ in 0..<20 {
+            if let descriptor = try? makeListener(preferredPort: boundPort) {
+                close(descriptor)
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        lock.withLock {
+            boundPort = nil
+            lastError = "暂停后无法确认中继端口已经释放。"
+        }
     }
 
     func stop(preservePort: Bool = false) {

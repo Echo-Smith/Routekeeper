@@ -29,13 +29,21 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(app.activationPolicy(), .accessory)
         XCTAssertTrue(delegate.isStatusItemConfigured)
         XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(app))
-        delegate.showChecksPanel()
+        delegate.showLastActivePanel()
         try? await Task.sleep(for: .milliseconds(250))
         XCTAssertEqual(app.activationPolicy(), .regular)
         XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(AppNavigationRequest.consumePendingPage(), .inspection)
+        XCTAssertNil(AppNavigationRequest.consumePendingPage())
         window.close()
         XCTAssertEqual(app.activationPolicy(), .accessory)
+    }
+
+    func testPersistedPageFallsBackToOverviewForUnknownValue() {
+        XCTAssertEqual(
+            GuardPage(rawValue: "sandbox"),
+            .sandbox
+        )
+        XCTAssertNil(GuardPage(rawValue: "removed-page"))
     }
 
     func testUnknownAndFailedChecksStayVisibleEvenForOptionalProbes() {
@@ -166,6 +174,17 @@ final class PresentationTests: XCTestCase {
                 kindEn: "log",
                 scope: .pastSession,
                 sizeBytes: 30,
+                fileCount: 1,
+                exists: true
+            ),
+            CleanupTarget(
+                path: "/test/chrome-profile",
+                labelZh: "Chrome",
+                labelEn: "Chrome",
+                kindZh: "profile",
+                kindEn: "profile",
+                scope: .chromeProfile,
+                sizeBytes: 40,
                 fileCount: 1,
                 exists: true
             )

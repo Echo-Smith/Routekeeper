@@ -30,6 +30,8 @@ final class LocalRelayTests: XCTestCase {
         relay.pause()
         XCTAssertFalse(relay.snapshot().running)
         XCTAssertThrowsError(try connect(port: localPort))
+        relay.pause()
+        XCTAssertFalse(relay.snapshot().running)
 
         let resumedPort = try relay.start(
             upstream: IsolationUpstream(host: "127.0.0.1", port: upstream.port, protocolType: .httpConnect)

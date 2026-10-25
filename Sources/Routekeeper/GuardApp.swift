@@ -10,6 +10,7 @@ extension Notification.Name {
 enum AppNavigationRequest {
     private static var pendingPage: GuardPage?
     private static var pendingSettings = false
+    static var hasPendingPage: Bool { pendingPage != nil }
 
     static func requestSettings() {
         pendingPage = nil
@@ -209,12 +210,20 @@ final class RoutekeeperAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showChecksPanel()
+        if flag {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        } else {
+            showLastActivePanel()
+        }
         return true
     }
 
     func showChecksPanel() {
         showPanel(page: .inspection)
+    }
+
+    func showLastActivePanel() {
+        showPanel(page: nil)
     }
 
     func showSandboxPanel() {

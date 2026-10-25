@@ -144,6 +144,26 @@ final class ClaudeWebBrowserController {
 
     var downloadPath: String { downloadsURL.path }
     var profilePath: String { profileRoot.path }
+    func refreshProfileAvailability() {
+        profileAvailable = Self.isOwnedProfile(at: profileRoot)
+    }
+
+    /// Stops only the dedicated Routekeeper Chrome instance before its profile
+    /// is trashed. Host Chrome sessions are never matched or terminated.
+    func stopForCleanup() async -> Bool {
+        if phase.isRunning || phase == .launching || busy {
+            await stop()
+        }
+        guard let pids = profileProcessIdentifiers(), pids.isEmpty else {
+            message = Self.text(
+                "无法确认 Routekeeper Chrome 已关闭，未清理配置。",
+                "Could not confirm that Routekeeper Chrome is closed; the profile was not cleaned."
+            )
+            return false
+        }
+        return true
+    }
+
     var egressWarning: String? {
         guard let report = egressReport, !report.isVerified else { return nil }
         return report.detail

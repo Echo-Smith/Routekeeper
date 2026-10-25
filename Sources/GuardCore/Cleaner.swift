@@ -8,6 +8,7 @@ public enum CleanupScope: String, CaseIterable, Sendable, Equatable {
     case currentSession
     case pastSession
     case persistentProfile
+    case chromeProfile
     case workspace
 }
 
@@ -16,11 +17,13 @@ public enum CleanupBlockReason: String, Sendable, Equatable {
     case processRunning
     case sessionRunning
     case profileInUse
+    case browserRunning
     case processInspectionUnavailable
 }
 
-/// Cache cleanup never includes conversations, projects, settings, browser
-/// storage, OAuth files or credentials. Paths are exact, predeclared targets.
+/// Cleanup never includes conversations, projects, settings, host-browser
+/// storage, OAuth files or credentials. Paths are exact, predeclared targets;
+/// the optional Routekeeper Chrome profile is its own explicitly selected item.
 public struct CleanupTarget: Identifiable, Sendable, Equatable {
     public var path: String
     public var labelZh: String
@@ -103,6 +106,8 @@ public struct CleanupSafetyContext: Sendable, Equatable {
     public var runningSessionRoots: Set<String>
     public var runningSessionProfiles: Set<String>
     public var runningWorkspaceRoots: Set<String>
+    public var chromeProfileRunning: Bool
+    public var chromeProfileInspectionAvailable: Bool
 
     public init(
         processInspectionAvailable: Bool,
@@ -111,7 +116,9 @@ public struct CleanupSafetyContext: Sendable, Equatable {
         scienceRunning: Bool = false,
         runningSessionRoots: Set<String> = [],
         runningSessionProfiles: Set<String> = [],
-        runningWorkspaceRoots: Set<String> = []
+        runningWorkspaceRoots: Set<String> = [],
+        chromeProfileRunning: Bool = false,
+        chromeProfileInspectionAvailable: Bool = true
     ) {
         self.processInspectionAvailable = processInspectionAvailable
         self.desktopRunning = desktopRunning
@@ -120,6 +127,8 @@ public struct CleanupSafetyContext: Sendable, Equatable {
         self.runningSessionRoots = runningSessionRoots
         self.runningSessionProfiles = runningSessionProfiles
         self.runningWorkspaceRoots = runningWorkspaceRoots
+        self.chromeProfileRunning = chromeProfileRunning
+        self.chromeProfileInspectionAvailable = chromeProfileInspectionAvailable
     }
 }
 
@@ -211,6 +220,7 @@ public enum CacheCleaner {
             ?? homeURL.appendingPathComponent("Routekeeper/Workspaces", isDirectory: true)
         let resolvedProfilesRoot = profilesRoot ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
         let profileHome = resolvedProfilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
+        let chromeProfileRoot = resolvedProfilesRoot.appendingPathComponent("ClaudeWeb", isDirectory: true)
 
         var definitions = hostDefinitions(home: home)
         var warnings: [String] = []
@@ -231,7 +241,6 @@ public enum CacheCleaner {
                 "已跳过 \(unowned) 个没有 Routekeeper 会话标记的目录；不会清理无法确认归属的数据。"
             )
         }
-
         for workspace in ownedWorkspaceContainers(
             in: resolvedWorkspacesRoot,
             sessionsRoot: resolvedSessionsRoot
@@ -252,6 +261,26 @@ public enum CacheCleaner {
         } else if FileManager.default.fileExists(atPath: profileHome.path) {
             warnings.append(
                 "持久登录目录存在但没有 Routekeeper 标记，已保留且不会参与清理。"
+            )
+        }
+        if ownsProfile(chromeProfileRoot) {
+            definitions.append(Definition(
+                path: chromeProfileRoot.path,
+                labelZh: "Routekeeper Chrome 配置",
+                labelEn: "Routekeeper Chrome profile",
+                kindZh: "独立配置、Cookie、登录状态、缓存与下载",
+                kindEn: "Dedicated profile, cookies, sign-in, cache and downloads",
+                scope: .chromeProfile,
+                owningRoot: chromeProfileRoot.path
+            ))
+            if chromeProfileIsRunning(profileRoot: chromeProfileRoot) == nil {
+                warnings.append(
+                    "无法核验 Routekeeper Chrome 进程状态；Chrome 配置已按失败关闭策略锁定。"
+                )
+            }
+        } else if FileManager.default.fileExists(atPath: chromeProfileRoot.path) {
+            warnings.append(
+                "Chrome 配置目录存在但没有 Routekeeper 标记，已保留且不会参与清理。"
             )
         }
 
@@ -324,6 +353,7 @@ public enum CacheCleaner {
             ?? homeURL.appendingPathComponent("Routekeeper/Workspaces", isDirectory: true)
         let resolvedProfilesRoot = profilesRoot ?? applicationSupport.appendingPathComponent("Profiles", isDirectory: true)
         let profileHome = resolvedProfilesRoot.appendingPathComponent("ClaudeDesktop/Home", isDirectory: true)
+        let chromeProfileRoot = resolvedProfilesRoot.appendingPathComponent("ClaudeWeb", isDirectory: true)
         let desktopRoot = ApplicationDiscovery.path(bundleID: ApplicationDiscovery.desktopID, name: "Claude")
         let processScan = LocalProcesses.scan(desktopRoots: desktopRoot.map { [$0] } ?? [])
         let executablePaths = LocalProcesses.ownExecutablePaths()
@@ -361,6 +391,7 @@ public enum CacheCleaner {
             where sessionIsRunning(workspace.sessionRoot) {
             runningWorkspaceRoots.insert(workspace.container.standardizedFileURL.path)
         }
+        let chromeProfileProcessState = chromeProfileIsRunning(profileRoot: chromeProfileRoot)
 
         return CleanupSafetyContext(
             processInspectionAvailable: processScan.available,
@@ -370,7 +401,9 @@ public enum CacheCleaner {
             scienceRunning: scienceRunning,
             runningSessionRoots: runningRoots,
             runningSessionProfiles: profilesInUse,
-            runningWorkspaceRoots: runningWorkspaceRoots
+            runningWorkspaceRoots: runningWorkspaceRoots,
+            chromeProfileRunning: chromeProfileProcessState ?? true,
+            chromeProfileInspectionAvailable: chromeProfileProcessState != nil
         )
     }
 
@@ -394,9 +427,30 @@ public enum CacheCleaner {
         case .persistentProfile:
             guard let root = target.owningRoot else { return .processInspectionUnavailable }
             return safety.runningSessionProfiles.contains(root) ? .profileInUse : nil
+        case .chromeProfile:
+            guard safety.chromeProfileInspectionAvailable else {
+                return .processInspectionUnavailable
+            }
+            return safety.chromeProfileRunning ? .browserRunning : nil
         case .workspace:
             let root = URL(fileURLWithPath: target.path).standardizedFileURL.path
             return safety.runningWorkspaceRoots.contains(root) ? .sessionRunning : nil
+        }
+    }
+
+    /// Checks only Routekeeper's dedicated Chrome profile marker. Returning
+    /// nil means process state could not be inspected and cleanup must fail closed.
+    static func chromeProfileIsRunning(profileRoot: URL) -> Bool? {
+        let result = Command.run(
+            "/bin/ps",
+            ["-ww", "-axo", "pid=,command="],
+            timeout: 2,
+            outputLimit: 2_000_000
+        )
+        guard result.status == 0 else { return nil }
+        let marker = "--user-data-dir=\(profileRoot.appendingPathComponent("ChromeProfile").path)"
+        return result.output.split(separator: "\n").contains { line in
+            line.contains(marker)
         }
     }
 

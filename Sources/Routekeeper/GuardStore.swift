@@ -774,6 +774,7 @@ final class GuardStore {
         cleanupSelection = []
         cleanupIncludesLocalData = false
         cleanupResult = ""
+        preferences.removeObject(forKey: Dashboard.lastPageKey)
         egressAutomationTask?.cancel()
         egressEventTask?.cancel()
         egressAutomationTask = nil
@@ -874,6 +875,7 @@ final class GuardStore {
                         && $0.fileCount > 0
                         && $0.isSelectable
                         && $0.scope != .pastSession
+                        && $0.scope != .chromeProfile
                         && $0.scope != .workspace
                 }
                 .map(\.id)
@@ -911,21 +913,43 @@ final class GuardStore {
         Task {
             var result = CleanupRunResult()
             if !selected.isEmpty {
-                result = await Task.detached(priority: .userInitiated) {
-                    let freshPlan = CacheCleaner.scanWithLiveSafety(
+                let freshPlan = await Task.detached(priority: .userInitiated) {
+                    CacheCleaner.scanWithLiveSafety(
                         home: home,
                         sessionsRoot: sessionsRoot,
                         workspacesRoot: workspacesRoot,
                         profilesRoot: profilesRoot,
                         currentSessionRoots: currentSessionRoots
                     )
-                    let freshByPath = Dictionary(uniqueKeysWithValues: freshPlan.targets.map { ($0.id, $0) })
-                    var outcome = CleanupRunResult()
-                    for original in selected {
-                        guard let target = freshByPath[original.id], target.isSelectable else {
-                            outcome.skippedCount += 1
-                            continue
-                        }
+                }.value
+                let freshByPath = Dictionary(
+                    uniqueKeysWithValues: freshPlan.targets.map { ($0.id, $0) }
+                )
+                var plannedMoves: [CleanupTarget] = []
+                var plannedSkips = 0
+                for original in selected {
+                    guard let target = freshByPath[original.id],
+                          target.isSelectable else {
+                        plannedSkips += 1
+                        continue
+                    }
+                    plannedMoves.append(target)
+                }
+                let canStopChrome = plannedMoves.contains {
+                    $0.scope == .chromeProfile
+                }
+                if canStopChrome,
+                   !(await sandbox.webBrowser.stopForCleanup()) {
+                    cleanupBusy = false
+                    cleanupResult = L10n.resolvedEnglish
+                        ? "Routekeeper Chrome could not be closed, so no cleanup was performed."
+                        : "无法确认 Routekeeper Chrome 已关闭，本次没有执行清理。"
+                    log(cleanupResult, attention: true)
+                    return
+                }
+                result = await Task.detached(priority: .userInitiated) {
+                    var outcome = CleanupRunResult(skippedCount: plannedSkips)
+                    for target in plannedMoves {
                         if CacheCleaner.trash(target) {
                             outcome.movedLabels.append(target.label(english: L10n.resolvedEnglish))
                             outcome.reclaimedBytes += target.sizeBytes
@@ -977,6 +1001,7 @@ final class GuardStore {
                         currentSessionRoots: currentSessionRoots
                     )
                 }.value
+                sandbox.webBrowser.refreshProfileAvailability()
             }
             cleanupBusy = false
 

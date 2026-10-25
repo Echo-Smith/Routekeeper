@@ -70,6 +70,7 @@ struct Dashboard: View {
     @AppStorage(L10n.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage(AppTextScale.storageKey) private var textScaleRaw = AppTextScale.standard.rawValue
     @AppStorage("routekeeper.disclaimer-accepted-version") private var disclaimerAcceptedVersion = ""
+    @AppStorage(Dashboard.lastPageKey) private var persistedPageRaw = GuardPage.home.rawValue
     @State private var showDisclaimerGate = false
     @State private var confirmLocalDataInCleanup = false
     @State private var expandedCleanupGroups: Set<String> = []
@@ -169,6 +170,7 @@ struct Dashboard: View {
         .id(store.languageRevision)
         .preferredColorScheme(appearanceOverride)
         .onAppear {
+            restorePersistedPage()
             enterPage(scrollingTo: .top)
             applyNavigationRequest()
             if disclaimerAcceptedVersion != DisclaimerDocument.currentVersion {
@@ -375,7 +377,25 @@ struct Dashboard: View {
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             page = resolvedPage
         }
+        persistedPageRaw = resolvedPage.rawValue
         enterPage(scrollingTo: target)
+    }
+
+    static let lastPageKey = "routekeeper.last-page-v1"
+
+    private func restorePersistedPage() {
+        guard detailPath.isEmpty,
+              AppNavigationRequest.hasPendingPage == false,
+              let persisted = GuardPage(rawValue: persistedPageRaw),
+              persisted != page else {
+            return
+        }
+        switch persisted {
+        case .inspection:
+            page = .networkProtection
+        default:
+            page = persisted
+        }
     }
 
     private func openNetworkProtection(at anchor: NetworkProtectionAnchor) {
@@ -1335,8 +1355,8 @@ struct Dashboard: View {
             }
         } message: {
             Text(text(
-                "本地信息包括 Routekeeper 设置、运行记录、报告、登录凭证和沙箱副本，无法从废纸篓恢复。",
-                "Local data includes Routekeeper settings, run history, reports, the saved credential and sandbox copies. It cannot be restored from Trash."
+                "本地信息包括 Routekeeper 设置、运行记录、报告、登录凭证、沙箱副本及专用 Chrome 配置，无法从废纸篓恢复。",
+                "Local data includes Routekeeper settings, run history, reports, the saved credential, sandbox copies and the dedicated Chrome profile. It cannot be restored from Trash."
             ))
         }
         .onChange(of: store.cleanupPlanRevision) {
@@ -1470,6 +1490,11 @@ struct Dashboard: View {
                          "Session and persistent-profile temporary data carrying a Routekeeper ownership marker"),
                     systemImage: "checkmark.seal"
                 )
+                Label(
+                    text("Routekeeper 专用 Chrome 配置；清除后会退出该配置中的登录状态",
+                         "The Routekeeper Chrome profile; clearing it signs out that profile"),
+                    systemImage: "globe"
+                )
             }
             .routekeeperFont(.callout)
             .foregroundStyle(.secondary)
@@ -1480,8 +1505,8 @@ struct Dashboard: View {
     private var cleanupPolicyCard: some View {
         Label(
             text(
-                "仅处理白名单内的可再生成缓存、临时文件和日志。详细边界见帮助。",
-                "Only allowlisted regenerable caches, temporary files and logs are handled. See Help for the full boundary."
+                "仅处理列表内明确列出的项目。缓存、临时文件与日志可重建；Chrome 配置和用户工作副本默认不选。详细边界见帮助。",
+                "Only explicitly listed items are handled. Caches, temporary files and logs are regenerable; the Chrome profile and user workspaces are not selected by default. See Help for the full boundary."
             ),
             systemImage: "checkmark.shield"
         )
@@ -1535,8 +1560,8 @@ struct Dashboard: View {
                         .routekeeperFont(.headline)
                         .accessibilityAddTraits(.isHeader)
                     Text(text(
-                        "安全缓存默认选中；工作副本默认不选。",
-                        "Safe caches are selected by default; workspaces are not selected."
+                        "安全缓存默认选中；工作副本与 Routekeeper Chrome 配置默认不选。",
+                        "Safe caches are selected by default; workspaces and the Routekeeper Chrome profile are not."
                     ))
                     .routekeeperFont(.caption)
                     .foregroundStyle(.secondary)
@@ -1591,8 +1616,8 @@ struct Dashboard: View {
                     )
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(text("清除设置、记录、凭证与沙箱副本",
-                              "Clear settings, history, credentials and sandbox copies"))
+                    Text(text("清除设置、记录、凭证、沙箱副本与 Chrome 配置",
+                              "Clear settings, history, credentials, sandbox copies and the Chrome profile"))
                         .routekeeperFont(.callout, weight: .medium)
                 }
 
@@ -1741,12 +1766,12 @@ struct Dashboard: View {
 
     private var cleanupSummaryTitle: String {
         if store.cleanupPlan == nil {
-            return text("清理缓存", "Cache cleanup")
+            return text("清理", "Cleanup")
         }
         if (store.cleanupPlan?.selectableCount ?? 0) == 0 {
-            return text("本次没有发现可清理缓存", "No cleanable caches found")
+            return text("本次没有发现可清理项目", "No cleanable items found")
         }
-        return text("发现可清理缓存", "Cleanable caches found")
+        return text("发现可清理项目", "Cleanable items found")
     }
 
     private var cleanupSummarySymbol: String {
@@ -1782,7 +1807,7 @@ struct Dashboard: View {
         if store.cleanupPlan == nil {
             return store.cleanupBusy
                 ? text("正在扫描", "Scanning")
-                : text("扫描缓存", "Scan caches")
+                : text("扫描", "Scan")
         }
         return cleanupActionTitle
     }
@@ -1820,6 +1845,7 @@ struct Dashboard: View {
         case .currentSession: return text("当前 Routekeeper 沙箱", "Current Routekeeper sandbox")
         case .pastSession: return text("历史 Routekeeper 沙箱", "Past Routekeeper sandboxes")
         case .persistentProfile: return text("持久登录沙箱数据", "Persistent sign-in sandbox profile")
+        case .chromeProfile: return text("Routekeeper Chrome", "Routekeeper Chrome")
         case .workspace: return text("用户项目副本", "User project workspaces")
         }
     }
@@ -1832,6 +1858,7 @@ struct Dashboard: View {
         case .currentSession: return "shippingbox.fill"
         case .pastSession: return "archivebox"
         case .persistentProfile: return "person.crop.circle.badge.checkmark"
+        case .chromeProfile: return "globe"
         case .workspace: return "folder.badge.gearshape"
         }
     }
@@ -1906,6 +1933,8 @@ struct Dashboard: View {
             return text("该沙箱会话仍在运行，结束后再清理。", "This sandbox session is running; clean after it ends.")
         case .profileInUse:
             return text("持久登录数据正被运行中的沙箱使用。", "The persistent sign-in profile is in use by a running sandbox.")
+        case .browserRunning:
+            return text("Routekeeper Chrome 仍在运行，关闭后重新扫描。", "Routekeeper Chrome is still running; close it and rescan.")
         case .processInspectionUnavailable:
             return text("无法核验进程状态，已按失败关闭策略锁定。", "Process state cannot be inspected, so the target is locked fail-closed.")
         }

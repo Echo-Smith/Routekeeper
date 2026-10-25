@@ -547,8 +547,8 @@ struct RoutekeeperHelpView: View {
             )
             helpSteps([
                 text(
-                    "点击“扫描缓存”，按来源查看可清理项目；安全缓存默认选中，历史沙箱默认关闭。",
-                    "Choose Scan caches and review items by source. Safe caches are selected by default; past sandboxes are off by default."
+                    "点击“扫描”，按来源查看可清理项目；安全缓存默认选中，历史沙箱、用户工作副本和 Routekeeper Chrome 配置默认关闭。",
+                    "Choose Scan and review items by source. Safe caches are selected by default; past sandboxes, user workspaces and the Routekeeper Chrome profile are off by default."
                 ),
                 text(
                     "普通缓存会移到废纸篓，可从废纸篓恢复。",
@@ -1018,7 +1018,7 @@ struct RoutekeeperHelpView: View {
                 text("系统会在交换根目录下建立“Claude Code”和“Claude”子目录。", "Routekeeper creates Claude Code and Claude subfolders under the exchange root."),
                 text("工作副本容器带有 Routekeeper 归属标记；清理页只处理可确认归属的副本，且不会默认勾选用户工作副本。", "Each workspace container has a Routekeeper ownership marker. Cleanup only handles verified copies and never selects user workspaces by default."),
                 text("共享环境的时区、语言地区和出口默认值会用于这三个环境；目录路径仍各自独立。", "Shared timezone, language region and exit defaults apply to all three environments, while their paths remain independent."),
-                text("会话结束后，工作副本仍保留供审阅；清理会话或 Chrome 配置 只会删除 Routekeeper 自己管理的数据。", "After a session ends, its workspace remains for review. Cleanup or clearing the Chrome profile removes only data managed by Routekeeper.")
+                text("会话结束后，工作副本仍保留供审阅；清理会话或 Chrome 配置只会删除 Routekeeper 自己管理的数据。", "After a session ends, its workspace remains for review. Cleanup or clearing the Chrome profile removes only data managed by Routekeeper.")
             ])
         }
     }
@@ -1058,7 +1058,7 @@ struct RoutekeeperHelpView: View {
             helpSteps([
                 text("先在右上角“共享环境、时区与地区…”完成共享配置，再补齐卡片内的客户端、登录凭证和 Chrome 准备项。", "Complete shared configuration under Shared environment, timezone and region in the top-right menu, then resolve client, sign-in and Chrome prerequisites inside each card."),
                 text("使用卡片右下角主操作创建隔离会话或打开 Chrome；三个环境可以分别进行。代理网关或出口核对未确认时会显示警告，但不会阻止启动。", "Use the bottom-right primary action to create an isolated session or open Chrome. All three can proceed independently. Unconfirmed gateway or exit verification shows a warning but does not block launch."),
-                text("会话运行后可以单独关闭或恢复网络，也可以单独结束并审阅工作副本；Chrome 可以关闭或清除独立配置。", "After a session starts, pause or restore its network and review or end its workspace independently. Chrome can close or clear its dedicated profile."),
+                text("会话运行后可以单独关闭或恢复网络，也可以单独结束并审阅工作副本；Chrome 可以独立关闭或恢复网络，其专用配置统一在“清理”页面处理。", "After a session starts, pause or restore its network and review or end its workspace independently. Chrome networking can be paused or restored independently; its dedicated profile is managed in Cleanup."),
                 text("关闭实验性沙箱使用顶部状态卡右侧的操作，并需要确认；存在活动会话或正在运行的 Chrome 时不可关闭。", "Turning off the experimental sandbox uses the action beside the status card at the top of the page and requires confirmation. It is unavailable while a session or Chrome is running.")
             ])
         }
